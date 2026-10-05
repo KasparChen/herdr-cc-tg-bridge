@@ -1,0 +1,18 @@
+#!/bin/sh
+# Send files (or text) from inside a bridged Claude session back to its Telegram topic.
+#   tg-send report.pdf chart.png
+#   tg-send --text "done"
+# The topic is found from HERDR_PANE_ID, which Herdr sets in every pane.
+set -eu
+PORT="${TG_BRIDGE_PORT:-18820}"
+[ -n "${HERDR_PANE_ID:-}" ] || { echo "tg-send: HERDR_PANE_ID is not set (run this inside a Herdr pane)" >&2; exit 2; }
+[ $# -gt 0 ] || { echo "usage: tg-send <file>... | tg-send --text <message>" >&2; exit 2; }
+
+if [ "$1" = "--text" ]; then
+  shift
+  payload=$(python3 -c 'import json,sys,os; print(json.dumps({"pane": os.environ["HERDR_PANE_ID"], "text": " ".join(sys.argv[1:])}))' "$@")
+else
+  payload=$(python3 -c 'import json,sys,os; print(json.dumps({"pane": os.environ["HERDR_PANE_ID"], "cwd": os.getcwd(), "paths": sys.argv[1:]}))' "$@")
+fi
+curl -s -m 180 -X POST -H 'content-type: application/json' --data "$payload" "http://127.0.0.1:$PORT/send"
+echo

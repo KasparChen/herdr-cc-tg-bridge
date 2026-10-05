@@ -1,0 +1,5 @@
+.env
+*.log
+node_modules/
+spike/state.json
+spike/bridge.log

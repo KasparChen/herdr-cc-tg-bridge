@@ -1,0 +1,64 @@
+#!/bin/sh
+# Install (or remove) a macOS LaunchAgent that starts tg-bridge at login and restarts it if it dies.
+#   bin/install-launchd                 install / reinstall and start
+#   bin/install-launchd uninstall       stop and remove
+# Optional environment at install time:
+#   TG_BRIDGE_LABEL          launchd label (default: local.tg-bridge)
+#   TG_BRIDGE_LAUNCH_PREFIX  command placed before bin/tg-bridge, e.g. a secret injector that exports TELEGRAM_BOT_TOKEN
+# On macOS, folders such as ~/Desktop are privacy-protected: the job runs through /bin/bash, which must have Full Disk Access
+# (System Settings > Privacy & Security) if the project lives in a protected folder.
+# A manual stop (Ctrl+C / SIGTERM, exit 0) stays stopped; crashes and kills are restarted.
+set -eu
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+LABEL="${TG_BRIDGE_LABEL:-local.tg-bridge}"
+PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+STATE_DIR="${TG_BRIDGE_STATE_DIR:-$HOME/.tg-bridge}"
+LOG="$STATE_DIR/bridge.log"
+DOMAIN="gui/$(id -u)"
+
+if [ "${1:-}" = "uninstall" ]; then
+  launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+  rm -f "$PLIST"
+  echo "removed $LABEL"
+  exit 0
+fi
+
+BUN="$(command -v bun)" || { echo "bun not found in PATH" >&2; exit 1; }
+HERDR="$(command -v herdr)" || { echo "herdr not found in PATH" >&2; exit 1; }
+PATH_VALUE="$(dirname "$BUN"):$(dirname "$HERDR"):/usr/bin:/bin:/usr/sbin:/sbin"
+SOCKET="${HERDR_SOCKET_PATH:-}"
+CMD="cd '$ROOT' && exec ${TG_BRIDGE_LAUNCH_PREFIX:-} bin/tg-bridge"
+mkdir -p "$STATE_DIR" "$(dirname "$PLIST")"
+
+xml() { printf '%s' "$1" | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g'; }
+{
+  cat <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key><string>$(xml "$LABEL")</string>
+  <key>ProgramArguments</key>
+  <array><string>/bin/bash</string><string>-c</string><string>$(xml "$CMD")</string></array>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key><string>$(xml "$PATH_VALUE")</string>
+EOF
+  [ -n "$SOCKET" ] && echo "    <key>HERDR_SOCKET_PATH</key><string>$(xml "$SOCKET")</string>"
+  cat <<EOF
+  </dict>
+  <key>RunAtLoad</key><true/>
+  <key>KeepAlive</key><dict><key>SuccessfulExit</key><false/></dict>
+  <key>ThrottleInterval</key><integer>10</integer>
+  <key>StandardOutPath</key><string>$(xml "$LOG")</string>
+  <key>StandardErrorPath</key><string>$(xml "$LOG")</string>
+</dict>
+</plist>
+EOF
+} > "$PLIST"
+plutil -lint "$PLIST" >/dev/null
+
+launchctl bootout "$DOMAIN/$LABEL" 2>/dev/null || true
+launchctl bootstrap "$DOMAIN" "$PLIST"
+echo "installed $LABEL -> $PLIST"
+echo "log: $LOG"

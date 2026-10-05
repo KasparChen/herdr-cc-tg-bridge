@@ -1,0 +1,10 @@
+{
+  "name": "tg-bridge",
+  "version": "1.0.0",
+  "description": "Use the Claude Code sessions running in Herdr from Telegram forum topics",
+  "type": "module",
+  "private": true,
+  "bin": { "tg-bridge": "bin/tg-bridge", "tg-send": "bin/tg-send" },
+  "scripts": { "start": "bun src/main.ts", "test": "bun test" },
+  "license": "MIT"
+}

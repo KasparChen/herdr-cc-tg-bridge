@@ -1,0 +1,28 @@
+#!/bin/sh
+# Supervisor: keeps the bridge running, marks the status red after a crash, restarts after 3s.
+#   tg-bridge            run in the foreground (put it in a Herdr tab)
+#   tg-bridge status     print local health JSON
+# Config comes from the environment or from .env in the project directory (Bun loads it automatically).
+set -u
+ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+cd "$ROOT" || exit 1
+PORT="${TG_BRIDGE_PORT:-18820}"
+
+if [ "${1:-}" = "status" ]; then
+  curl -s -m 3 "http://127.0.0.1:$PORT/health" || { echo '{"online":false,"error":"bridge not running"}'; exit 1; }
+  echo
+  exit 0
+fi
+
+trap 'kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; exit 0' INT TERM
+trap 'kill -HUP "$child" 2>/dev/null; wait "$child" 2>/dev/null; exit 0' HUP
+while :; do
+  bun src/main.ts &
+  child=$!
+  wait "$child"
+  code=$?
+  [ "$code" -eq 0 ] && exit 0
+  echo "$(date '+%F %T') bridge exited with ${code}, restarting in 3s"
+  bun src/main.ts --mark-offline "进程异常退出（退出码 ${code}），3 秒后自动重启" >/dev/null 2>&1
+  sleep 3
+done
