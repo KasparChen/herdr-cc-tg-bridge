@@ -15,6 +15,9 @@ export function startControl(cfg: Config, tg: Telegram, store: Store, status: St
     async fetch(req) {
       const url = new URL(req.url);
       if (url.pathname === "/health") return Response.json(status.health());
+      // JSON only: a web page can send a text/plain POST to localhost without a CORS preflight
+      if (req.method === "POST" && !(req.headers.get("content-type") ?? "").startsWith("application/json"))
+        return Response.json({ ok: false, error: "content-type must be application/json" }, { status: 415 });
       const body: any = req.method === "POST" ? await req.json().catch(() => ({})) : {};
       if (url.pathname === "/send") {
         const thread = body.thread ?? store.topicOfPane(String(body.pane ?? ""));

@@ -132,12 +132,13 @@ export class Watcher {
     if (ask && !this.askedIds.has(ask.id)) {
       this.askedIds.add(ask.id);
       const qs: any[] = ask.input?.questions ?? [];
-      if (qs.length && qs.every(q => !q.multiSelect)) {
-        for (const [qi, q] of qs.entries()) {
-          const kb = q.options.map((o: any, oi: number) => [{ text: cut(o.label, 60), callback_data: `aq:${this.thread}:${qi}:${oi}` }]);
-          const desc = q.options.map((o: any) => (o.description ? `• <b>${esc(o.label)}</b>：${esc(o.description)}` : "")).filter(Boolean).join("\n");
-          await this.tg.send(this.thread, `❓ <b>${esc(q.question)}</b>${desc ? "\n" + desc : ""}`, { reply_markup: { inline_keyboard: kb } });
-        }
+      // buttons only for a single single-select question: key presses land on whichever question is active,
+      // so with several questions a button could select an option in the wrong one
+      if (qs.length === 1 && !qs[0].multiSelect) {
+        const q = qs[0];
+        const kb = q.options.map((o: any, oi: number) => [{ text: cut(o.label, 60), callback_data: `aq:${this.thread}:0:${oi}` }]);
+        const desc = q.options.map((o: any) => (o.description ? `• <b>${esc(o.label)}</b>：${esc(o.description)}` : "")).filter(Boolean).join("\n");
+        await this.tg.send(this.thread, `❓ <b>${esc(q.question)}</b>${desc ? "\n" + desc : ""}`, { reply_markup: { inline_keyboard: kb } });
         return;
       }
     }
