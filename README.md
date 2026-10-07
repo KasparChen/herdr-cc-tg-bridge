@@ -28,6 +28,7 @@ macOS 15.7, 43 GiB free on /, .gitignore has 4 rules.   ← final answer
 ## Features
 
 - **Topic = session.** `/new name` (or creating a topic by hand) opens a new Claude session in a Herdr tab and binds it to the topic.
+- **Full lifecycle from Telegram.** `/close` (or closing the topic in the client) ends the Herdr pane and closes the topic; reopening it, or just writing in it, resumes the same session with `claude --resume`. `/delete` removes topic and session. `/sessions` lists everything with buttons. Run `/tg-bind` inside a session you started on the computer to hand it over to a new topic and continue it from the phone. If the pane goes away on the computer, the topic is told once, with buttons, and is never spammed again.
 - **Live progress.** Tool calls stream into a folded bubble that is edited in place; the answer arrives as a separate message. Markdown is converted to Telegram HTML, tables become bullet groups.
 - **Files both ways.** Photos and documents you send are saved locally and passed to the session as file paths. Deliverables the session writes (images, PDF, Office, archives, HTML, …) are sent back automatically; anything else it can push with `tg-send`.
 - **Questions as buttons.** When Claude asks a multiple-choice question (`AskUserQuestion`), the options appear as inline buttons. Other prompts are shown as a screen capture you can answer with `/keys`.
@@ -46,7 +47,7 @@ Telegram group (Topics)
       └──── tails ~/.claude/projects/*/<session>.jsonl ◄┘
 ```
 
-The bridge never starts Claude processes itself. It sends input with `herdr agent prompt`, watches state with `herdr agent get`, presses keys with `herdr pane send-keys`, and reads replies from the session transcript. Herdr's Claude integration reports each session's id, which is how the bridge finds the right transcript. Design notes and trade-offs: [docs/PRD-v1.md](docs/PRD-v1.md) (Chinese).
+The bridge never starts Claude processes itself. It sends input with `herdr agent prompt`, watches state with `herdr agent get`, presses keys with `herdr pane send-keys`, and reads replies from the session transcript. Herdr's Claude integration reports each session's id, which is how the bridge finds the right transcript. Design notes and trade-offs: [docs/PRD-v1.md](docs/PRD-v1.md) and the session lifecycle in [docs/PRD-v2.md](docs/PRD-v2.md) (Chinese).
 
 ## Requirements
 
@@ -97,13 +98,25 @@ Only sessions started after the Herdr integration is installed can be bridged.
 
 | Where | Send | Result |
 |---|---|---|
-| Outside topics | `/new name` | New topic + new session. Without a name, the topic is renamed after the session's title |
-| Outside topics | `/status`, `/help` | Bridge status, help |
+| Anywhere | `/new name` | New topic + new session. Without a name, the topic is renamed after the session's title |
+| Anywhere | `/sessions` | All sessions with state, context use and last activity, plus plan limits; one row of buttons each (close / resume / reopen, delete) |
+| Desktop session | `/tg-bind`, `/tg-bind off` | Hand this session over to a new topic (handoff card + last answer, then live sync), or disconnect it |
+| Anywhere | `/status`, `/help` | Bridge status, help |
 | In a topic | Text, photos, files | Delivered to that topic's session |
 | In a topic | `/clear` and other slash commands | Passed through to Claude. After `/clear` you are in a fresh context |
 | In a topic | `/stop` | Interrupt the current reply |
 | In a topic | `/screen` | Last 30 lines of the session's screen |
 | In a topic | `/keys down enter` | Send key presses for prompts without buttons |
+| In a topic | `/close` | End the pane and close the topic; history stays. Closing the topic in the client does the same |
+| In a topic | `/delete` | After a confirm button: end the pane and delete the topic with all its messages |
+| Client | Reopen a closed topic, or write in it | Resume the same session (`claude --resume`) |
+| Client | Rename the topic | The Herdr tab is renamed too; the session title no longer overrides it |
+
+When the session's pane is gone (closed on the computer, or Claude exited), the topic gets one notice with buttons: resume, start fresh, close. The next message resumes by default. Deleted topics are noticed when a send fails or by an hourly probe; their pane is ended and the binding removed. The bridge commands are registered in the group's `/` menu.
+
+Sessions bound with `/tg-bind` are desktop sessions: closing or deleting their topic only disconnects Telegram, the session keeps running and its tab keeps its name. Reopening the topic, writing in it, or running `/tg-bind` again reconnects the same topic. `/tg-bind` is a Claude Code skill wrapping `bin/tg-bind`; only sessions started after the Herdr Claude hook was installed can be bound.
+
+Finished turns show the context use in the bubble header (`ctx 43% (430k)`), with a one-time warning at 80%. If `TG_USAGE_FILE` / `TG_FABLE_USAGE_FILE` point at JSON files with plan limits (see `.env.example`), the pinned status, `/status` and `/sessions` show them.
 
 From inside a bridged session:
 
@@ -124,13 +137,15 @@ bin/tg-send --text "done"
 | `/status` | Same content | No reply |
 | Herdr workspace token `tg` | `🟢 <sessions>` | Disappears after 90 s |
 
-When the computer sleeps nothing can be sent, so the pinned message simply stops updating. If "last update" is more than two minutes old, the bridge or the computer is offline.
+While it runs, the bridge keeps the Mac from idle-sleeping with `caffeinate` (`TG_BRIDGE_CAFFEINATE=0` turns this off). Closing the lid still puts the Mac to sleep. When the computer sleeps nothing can be sent, so the pinned message simply stops updating. If "last update" is more than two minutes old, the bridge or the computer is offline.
 
 ## Status of testing
 
 Verified end to end on macOS: text round trips with the progress bubble, photo upload, automatic file return, `tg-send`, `/clear`, title sync, crash recovery with the red status, and launchd restarting a killed supervisor.
 
-Not yet verified with real Telegram input: tapping the question buttons, creating a topic by hand, recovery after a real network outage, and starting at an actual reboot. The code paths exist and were exercised through the local `/sim` endpoint only.
+The session lifecycle (close, reopen, resume after `/exit` or a closed tab, delete, deleted-topic detection, `/sessions`, `/tg-bind`) was verified through `/sim` and the Bot API.
+
+Not yet verified with real Telegram input: tapping the question buttons and the lifecycle buttons, creating, closing, reopening, renaming or deleting a topic by hand, recovery after a real network outage, and starting at an actual reboot. The code paths exist and were exercised through the local `/sim` endpoint only.
 
 ## Limits
 

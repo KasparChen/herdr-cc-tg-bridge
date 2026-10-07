@@ -3,6 +3,8 @@ import { mkdtempSync, writeFileSync, appendFileSync, mkdirSync } from "fs";
 import { tmpdir, homedir } from "os";
 import { join } from "path";
 import { loadConfig } from "../src/config";
+import { ago, cleanTitle, lastExchange } from "../src/lifecycle";
+import { left, limitsLine, parseCtx } from "../src/usage";
 import { pickOutbox } from "../src/outbox";
 import { bubble, fmtSecs, md2html, mdChunks, stripTags, tables2bullets, toolLine } from "../src/render";
 import { parseLine, TranscriptTail } from "../src/transcript";
@@ -92,5 +94,64 @@ describe("config", () => {
     expect([...c.allowedUsers]).toEqual([1, 2]);
     expect(c.workdir).toBe(join(homedir(), "x"));
     expect(c.sim).toBe(false);
+  });
+});
+
+describe("lifecycle", () => {
+  test("ago", () => {
+    const now = 10 * 86400_000;
+    expect(ago(undefined, now)).toBe("");
+    expect(ago(now - 30_000, now)).toBe("刚刚");
+    expect(ago(now - 5 * 60_000, now)).toBe("5 分钟前");
+    expect(ago(now - 3 * 3600_000, now)).toBe("3 小时前");
+    expect(ago(now - 2 * 86400_000, now)).toBe("2 天前");
+  });
+  test("cleanTitle drops the spinner glyph", () => {
+    expect(cleanTitle("◐ HR 圈分享")).toBe("HR 圈分享");
+    expect(cleanTitle("✳ 3D 打印")).toBe("3D 打印");
+    expect(cleanTitle(undefined)).toBe("");
+  });
+  test("lastExchange finds the last prompt and the reply that ended its turn", () => {
+    const L = (o: any) => JSON.stringify(o);
+    const t = [
+      L({ type: "user", message: { content: "第一问" } }),
+      L({ type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text: "第一答" }] } }),
+      L({ type: "user", message: { content: "第二问" } }),
+      L({ type: "assistant", message: { stop_reason: "tool_use", content: [{ type: "text", text: "先查一下" }, { type: "tool_use", id: "1", name: "Bash", input: {} }] } }),
+      L({ type: "assistant", message: { stop_reason: "end_turn", content: [{ type: "text", text: "第二答" }] } }),
+      L({ type: "user", message: { content: "<task-notification>x</task-notification>" } }),
+      L({ type: "ai-title", aiTitle: "标题" }),
+    ].join("\n");
+    expect(lastExchange(t)).toEqual({ ask: "第二问", answer: "第二答", title: "标题" });
+  });
+});
+
+describe("turn end", () => {
+  const line = (stop: string, content: any[]) => JSON.stringify({ type: "assistant", message: { stop_reason: stop, content } });
+  test("end_turn with text closes the turn, thinking-only or tool_use does not", () => {
+    expect(parseLine(line("end_turn", [{ type: "text", text: "done" }])).map(e => e.kind)).toEqual(["text", "end"]);
+    expect(parseLine(line("end_turn", [{ type: "thinking", thinking: "x" }])).map(e => e.kind)).toEqual([]);
+    expect(parseLine(line("tool_use", [{ type: "text", text: "checking" }])).map(e => e.kind)).toEqual(["text"]);
+  });
+});
+
+describe("usage", () => {
+  test("parseCtx", () => {
+    expect(parseCtx("⛁ 43% (430k)")).toEqual({ text: "43% (430k)", pct: 43 });
+    expect(parseCtx(undefined)).toBeUndefined();
+  });
+  test("left", () => {
+    const now = 1_000_000_000_000;
+    expect(left(now / 1000 + 4 * 3600 + 600, now)).toBe("4h10m");
+    expect(left(now / 1000 + 2 * 86400 + 3600, now)).toBe("2d1h");
+    expect(left(undefined, now)).toBe("");
+  });
+  test("limitsLine reads both files and is empty without them", () => {
+    const d = mkdtempSync(join(tmpdir(), "tgb-"));
+    const now = 1_000_000_000_000, s = now / 1000;
+    writeFileSync(join(d, "u.json"), JSON.stringify({ five_hour: { used_percentage: 7.4, resets_at: s + 3600 }, seven_day: { used_percentage: 24, resets_at: s + 86400 * 4 }, updated_at: s - 600 }));
+    writeFileSync(join(d, "f.json"), JSON.stringify({ percent: 2, resets_at: s + 86400 * 4, fetched_at: s - 60 }));
+    expect(limitsLine({ usageFile: join(d, "u.json"), fableUsageFile: join(d, "f.json") }, now)).toBe("5h 7%（1h0m 后重置） · 7d 24%（4d0h 后重置） · Fable 2%（4d0h 后重置）");
+    expect(limitsLine({}, now)).toBe("");
   });
 });

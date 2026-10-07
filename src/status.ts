@@ -6,6 +6,8 @@ import { log } from "./log";
 import type { Store } from "./store";
 import type { Telegram } from "./telegram";
 import type { Watcher } from "./session";
+import { esc } from "./render";
+import { limitsLine } from "./usage";
 
 export type Health = { online: boolean; telegram: boolean; herdr: boolean; lastPollAgoSec: number; sessions: number; working: number; startedAt: number };
 
@@ -30,6 +32,7 @@ export class Status {
   }
 
   text(h = this.health()): string {
+    const limits = esc(limitsLine(this.cfg));
     const dot = h.online ? "🟢" : "🟡";
     const tgLine = h.telegram ? "正常" : h.lastPollAgoSec < 0 ? "尚未连上" : `${h.lastPollAgoSec}s 没有成功轮询`;
     return [
@@ -37,6 +40,7 @@ export class Status {
       `Telegram：${tgLine}`,
       `Herdr：${h.herdr ? "正常" : "连不上"}`,
       `会话：${h.sessions} 个，运行中 ${h.working} 个`,
+      ...(limits ? [`额度：${limits}`] : []),
       `启动于 ${new Date(h.startedAt).toLocaleString("zh-CN", { hour12: false })}`,
       `<i>更新于 ${hhmmss()}，超过 ${Math.ceil((this.cfg.statusIntervalSec * 3) / 60)} 分钟没更新就是 bridge 或电脑已离线</i>`,
     ].join("\n");

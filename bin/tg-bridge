@@ -14,6 +14,12 @@ if [ "${1:-}" = "status" ]; then
   exit 0
 fi
 
+# Keep the Mac from idle-sleeping while the bridge runs (-s also covers system sleep on AC power). The assertion
+# ends with this script (-w). Closing the lid still sleeps the Mac. Set TG_BRIDGE_CAFFEINATE=0 to turn this off.
+if [ "${TG_BRIDGE_CAFFEINATE:-1}" != "0" ] && command -v caffeinate >/dev/null 2>&1; then
+  caffeinate -i -s -w $$ &
+fi
+
 trap 'kill "$child" 2>/dev/null; wait "$child" 2>/dev/null; exit 0' INT TERM
 trap 'kill -HUP "$child" 2>/dev/null; wait "$child" 2>/dev/null; exit 0' HUP
 while :; do

@@ -1,14 +1,15 @@
-// Local-only HTTP: /health, /send (used by bin/tg-send from inside a session), /sim (tests, opt-in).
+// Local-only HTTP: /health, /send (bin/tg-send), /bind (bin/tg-bind), /sim (tests, opt-in).
 import { resolve } from "path";
 import type { Config } from "./config";
 import { log } from "./log";
 import { esc } from "./render";
+import type { Lifecycle } from "./lifecycle";
 import type { Router } from "./router";
 import type { Status } from "./status";
 import type { Store } from "./store";
 import type { Telegram } from "./telegram";
 
-export function startControl(cfg: Config, tg: Telegram, store: Store, status: Status, router: Router) {
+export function startControl(cfg: Config, tg: Telegram, store: Store, status: Status, router: Router, life: Lifecycle) {
   return Bun.serve({
     hostname: "127.0.0.1",
     port: cfg.port,
@@ -30,6 +31,24 @@ export function startControl(cfg: Config, tg: Telegram, store: Store, status: St
           log("tg-send", thread, sent.includes(abs) ? "sent" : "FAILED", abs);
         }
         return Response.json({ ok: true, sent });
+      }
+      if (url.pathname === "/bind") {
+        // bin/tg-bind from inside a desktop session
+        if (!body.pane) return Response.json({ ok: false, error: "missing pane" }, { status: 400 });
+        if (body.off) {
+          const thread = store.topicOfPane(String(body.pane));
+          if (!thread) return Response.json({ ok: false, error: "this pane is not bound to a Telegram topic" }, { status: 404 });
+          await life.close(thread, false);
+          return Response.json({ ok: true, thread, closed: true });
+        }
+        const r = await life.attach(String(body.pane));
+        return Response.json(r, { status: r.ok ? 200 : 409 });
+      }
+      if (url.pathname === "/sim" && cfg.sim && body.callback) {
+        // a button press: {"callback":"lc:close:15","message_id":123}
+        const q = { id: "sim", from: { id: [...cfg.allowedUsers][0] }, data: body.callback, message: body.message_id ? { message_id: body.message_id } : undefined };
+        router.onCallback(q).catch(e => log("sim", e));
+        return Response.json({ ok: true });
       }
       if (url.pathname === "/sim" && cfg.sim) {
         const fake = {

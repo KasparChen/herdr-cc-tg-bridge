@@ -28,8 +28,8 @@ export const commentLine = (text: string) => `💬 ${cut(text.replace(/[*`#_]/g,
 export const isComment = (line: string) => /^(💬|🖥)/u.test(line);
 
 // Collapsed view shows the first three lines: status, counters, "...".
-export function bubble(lines: string[], calls: number, secs: number, done: boolean, max = 3600): string {
-  const head = `<b>${done ? "✅ 完成" : "⚙️ 执行中"}</b>\n<i>🔧 ${calls} 次调用 · ${fmtSecs(secs)}</i>`;
+export function bubble(lines: string[], calls: number, secs: number, done: boolean, max = 3600, extra = ""): string {
+  const head = `<b>${done ? "✅ 完成" : "⚙️ 执行中"}</b>\n<i>🔧 ${calls} 次调用 · ${fmtSecs(secs)}${extra ? ` · ${esc(extra)}` : ""}</i>`;
   let body = lines.map(l => (isComment(l) ? `<b>${esc(l)}</b>` : esc(l)));
   while (body.length && body.join("\n").length > max) body = body.slice(1);
   return `<blockquote expandable>${head}${body.length ? "\n...\n" + body.join("\n") : ""}</blockquote>`;

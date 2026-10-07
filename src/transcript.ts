@@ -8,7 +8,8 @@ export type TEvent =
   | { kind: "queued"; text: string }
   | { kind: "tool"; id: string; name: string; input: any }
   | { kind: "text"; text: string }
-  | { kind: "title"; title: string };
+  | { kind: "title"; title: string }
+  | { kind: "end" }; // the main agent ended its turn (even if background agents keep the session busy)
 
 export const transcriptPath = (cwd: string, session: string) =>
   join(homedir(), ".claude/projects", cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${session}.jsonl`);
@@ -27,6 +28,8 @@ export function parseLine(line: string): TEvent[] {
     if (b.type === "tool_use") out.push({ kind: "tool", id: b.id, name: b.name, input: b.input });
     else if (b.type === "text" && b.text?.trim()) out.push({ kind: "text", text: b.text });
   }
+  // one reply can be written as several lines (thinking, then text); only the line carrying the text closes the turn
+  if (d.message.stop_reason === "end_turn" && out.some(e => e.kind === "text")) out.push({ kind: "end" });
   return out;
 }
 
