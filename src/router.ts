@@ -10,8 +10,9 @@ import type { Status } from "./status";
 import type { Store } from "./store";
 import { MAX_DOWNLOAD, REACT, type Telegram } from "./telegram";
 import { limitsLine } from "./usage";
+import { locale, tr, zh } from "./i18n";
 
-const HELP = [
+const HELP = () => (zh() ? [
   "<b>tg-bridge 用法</b>",
   "• <code>/new 名字</code>：新建话题和会话。也可以在客户端里手动建话题",
   "• 电脑上已经在聊的会话，在那个会话里用 <code>/tg-bind</code> 接到这里",
@@ -22,14 +23,29 @@ const HELP = [
   "• <code>/stop</code> 打断当前回复，<code>/screen</code> 看会话屏幕，<code>/keys down enter</code> 发按键",
   "• 你发的消息上会标进度：👀 收到，✍ 会话在处理，🤔 等你选择，标记消失就是回答已发完；💔 没送进会话或发送失败，😱 回答可能没发出去，发 <code>/resend</code> 补发",
   "• <code>/sessions</code> 看全部会话，<code>/status</code> 看 bridge 状态和额度",
-].join("\n");
+] : [
+  "<b>How to use tg-bridge</b>",
+  "• <code>/new name</code>: new topic and session. Creating a topic in the client works too",
+  "• A session already running on the computer: run <code>/tg-bind</code> in it to bring it here",
+  "• Text, photos and files sent in a topic go to its session",
+  "• <code>/clear</code> and other slash commands in a topic are passed to the session",
+  "• <code>/close</code> ends the session and closes the topic; reopening the topic resumes it. Closing the topic in the client does the same",
+  "• <code>/delete</code> ends the session and deletes the topic (asks first). For a session taken over from the computer, close and delete only disconnect Telegram",
+  "• <code>/stop</code> interrupts the reply, <code>/screen</code> shows the session's screen, <code>/keys down enter</code> sends key presses",
+  "• Your messages show progress: 👀 received, ✍ being worked on, 🤔 waiting for your choice, no mark once the answer has arrived; 💔 not delivered or a send failed, 😱 part of the answer may be missing, send <code>/resend</code>",
+  "• <code>/sessions</code> lists all sessions, <code>/status</code> shows the bridge status and limits",
+]).join("\n");
 
 // Shown in the client's "/" menu for this group.
-export const COMMANDS = [
+export const COMMANDS = () => (zh() ? [
   ["new", "新建话题和会话"], ["sessions", "列出全部会话"], ["close", "结束本话题的会话并关闭话题"],
   ["delete", "结束会话并删除本话题"], ["stop", "打断当前回复"], ["screen", "看会话屏幕"], ["keys", "往会话发按键"],
   ["resend", "补发上一轮没确认发出的回答"], ["status", "看 bridge 状态和额度"], ["help", "用法"],
-].map(([command, description]) => ({ command, description }));
+] : [
+  ["new", "New topic and session"], ["sessions", "List all sessions"], ["close", "End this topic's session and close the topic"],
+  ["delete", "End the session and delete this topic"], ["stop", "Interrupt the current reply"], ["screen", "Show the session's screen"], ["keys", "Send key presses to the session"],
+  ["resend", "Send again what may not have arrived"], ["status", "Bridge status and limits"], ["help", "How to use"],
+]).map(([command, description]) => ({ command, description }));
 
 const MEDIA = ["photo", "document", "video", "audio", "voice", "animation", "video_note"];
 const HINT_EVERY_MS = 10 * 60_000;
@@ -66,12 +82,12 @@ export class Router {
     const [first = "", ...rest] = text.split(/\s+/);
     const cmd = first.startsWith("/") ? first.replace(/@\w+$/, "").toLowerCase() : "";
 
-    if (cmd === "/help" || cmd === "/start") { await this.tg.send(thread, HELP); return; }
+    if (cmd === "/help" || cmd === "/start") { await this.tg.send(thread, HELP()); return; }
     if (cmd === "/status") { await this.tg.send(thread, this.status.text(undefined, this.status.paused)); return; }
     if (cmd === "/new") {
       const name = rest.join(" ");
-      const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, name: cut(name || `新会话 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`, 120) });
-      if (!j.ok) { await this.tg.notice(thread, `❌ 建话题失败：${esc(j.description ?? "")}`); return; }
+      const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, name: cut(name || `${tr("新会话", "New session")} ${new Date().toLocaleTimeString(locale(), { hour12: false })}`, 120) });
+      if (!j.ok) { await this.tg.notice(thread, tr(`❌ 建话题失败：${esc(j.description ?? "")}`, `❌ Could not create the topic: ${esc(j.description ?? "")}`)); return; }
       await this.life.open(j.result.message_thread_id, { name: cut(name || `tg-${j.result.message_thread_id}`, 40), autoName: !name, fresh: true });
       return;
     }
@@ -81,10 +97,10 @@ export class Router {
       return;
     }
     if (!thread) {
-      if (cmd === "/close" || cmd === "/delete") { await this.tg.notice(undefined, `在要处理的话题里发 <code>${cmd}</code>，或者用 /sessions 里的按钮`); return; }
+      if (cmd === "/close" || cmd === "/delete") { await this.tg.notice(undefined, tr(`在要处理的话题里发 <code>${cmd}</code>，或者用 /sessions 里的按钮`, `Send <code>${cmd}</code> in the topic you mean, or use the buttons in /sessions`)); return; }
       if (Date.now() - this.lastHint > HINT_EVERY_MS) {
         this.lastHint = Date.now();
-        await this.tg.notice(undefined, "在话题里发的消息才会送进会话。/new 新建，/sessions 看全部，/help 看用法");
+        await this.tg.notice(undefined, tr("在话题里发的消息才会送进会话。/new 新建，/sessions 看全部，/help 看用法", "Only messages in a topic reach a session. /new starts one, /sessions lists them, /help explains"));
       }
       return;
     }
@@ -102,11 +118,11 @@ export class Router {
     if (cmd === "/resend") {
       const w = this.watchers.get(thread);
       if (w) await w.resend();
-      else await this.tg.notice(thread, "这个话题现在没有会话，也就没有可以重发的回答");
+      else await this.tg.notice(thread, tr("这个话题现在没有会话，也就没有可以重发的回答", "This topic has no session, so there is nothing to send again"));
       return;
     }
     if (cmd === "/keys" || cmd === "/stop" || cmd === "/screen") {
-      if (!live) { await this.tg.notice(thread, "这个话题现在没有运行中的会话"); return; }
+      if (!live) { await this.tg.notice(thread, tr("这个话题现在没有运行中的会话", "This topic has no running session")); return; }
       if (cmd === "/keys") await H.sendKeys(cur!.pane, rest);
       else if (cmd === "/stop") await H.sendKeys(cur!.pane, ["esc"]);
       else {
@@ -125,7 +141,7 @@ export class Router {
     const b = this.store.state.topics[thread];
     const files = await this.saveAttachments(m, thread);
     if (!text && !files.length) { m.message_id && this.tg.react(m.message_id, REACT.failed); return; }
-    const body = [text || (files.length ? "（见附件）" : ""), ...files.map(f => `[附件] ${f}`)].join("\n");
+    const body = [text || (files.length ? tr("（见附件）", "(see attachment)") : ""), ...files.map(f => `[${tr("附件", "attachment")}] ${f}`)].join("\n");
     const w = this.watchers.get(thread);
     w?.noteFromTg(body, tracked ? m.message_id : undefined);
     b.lastActive = Date.now();
@@ -134,7 +150,7 @@ export class Router {
     if (!r?.result) {
       if (m.message_id) w?.dropFromTg(m.message_id);
       m.message_id && this.tg.react(m.message_id, REACT.failed);
-      await this.tg.notice(thread, `⚠️ 送达失败，Herdr 返回 <code>${esc(cut(JSON.stringify(r?.error ?? r), 300))}</code>`);
+      await this.tg.notice(thread, tr(`⚠️ 送达失败，Herdr 返回 <code>${esc(cut(JSON.stringify(r?.error ?? r), 300))}</code>`, `⚠️ Not delivered; Herdr answered <code>${esc(cut(JSON.stringify(r?.error ?? r), 300))}</code>`));
     }
   }
 
@@ -148,11 +164,11 @@ export class Router {
     }
     const out: string[] = [];
     for (const it of items) {
-      if ((it.size ?? 0) > MAX_DOWNLOAD) { await this.tg.send(thread, `⚠️ ${esc(it.name)} 超过 20MB，Bot API 下载不了`); continue; }
+      if ((it.size ?? 0) > MAX_DOWNLOAD) { await this.tg.send(thread, tr(`⚠️ ${esc(it.name)} 超过 20MB，Bot API 下载不了`, `⚠️ ${esc(it.name)} is over 20 MB, which the Bot API cannot download`)); continue; }
       const dest = join(this.cfg.stateDir, "inbox", String(thread), `${stamp}-${it.name.replace(/[^\w.\-一-鿿]/g, "_")}`);
       const saved = await this.tg.download(it.id, dest);
       if (saved) out.push(saved);
-      else await this.tg.send(thread, `⚠️ ${esc(it.name)} 下载失败`);
+      else await this.tg.send(thread, tr(`⚠️ ${esc(it.name)} 下载失败`, `⚠️ Could not download ${esc(it.name)}`));
     }
     return out;
   }
@@ -170,7 +186,7 @@ export class Router {
     await H.sendKeys(bind.pane, [...Array(Number(oi)).fill("down"), "enter"]);
     const label = q.message?.reply_markup?.inline_keyboard?.[Number(oi)]?.[0]?.text ?? "";
     await this.tg.call("editMessageReplyMarkup", { chat_id: this.cfg.chatId, message_id: msg, reply_markup: { inline_keyboard: [] } });
-    if (label) await this.tg.send(Number(thread), `☑️ 已选：${esc(label)}`, { reply_to_message_id: msg });
+    if (label) await this.tg.send(Number(thread), tr(`☑️ 已选：${esc(label)}`, `☑️ Chose: ${esc(label)}`), { reply_to_message_id: msg });
   }
 
   // Buttons from pane-down notices, /delete and the /sessions list. A pressed notice loses its buttons;

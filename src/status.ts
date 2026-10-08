@@ -10,11 +10,12 @@ import type { Telegram } from "./telegram";
 import type { Watcher } from "./session";
 import { esc } from "./render";
 import { limitsLine } from "./usage";
+import { locale, tr } from "./i18n";
 
 export type Health = { online: boolean; telegram: boolean; herdr: boolean; lastPollAgoSec: number; sessions: number; working: number; startedAt: number };
 
-const hhmmss = (t = Date.now()) => new Date(t).toLocaleTimeString("zh-CN", { hour12: false });
-const REFRESH = { inline_keyboard: [[{ text: "🔄 刷新", callback_data: "st:refresh" }]] };
+const hhmmss = (t = Date.now()) => new Date(t).toLocaleTimeString(locale(), { hour12: false });
+const REFRESH = () => ({ inline_keyboard: [[{ text: tr("🔄 刷新", "🔄 Refresh"), callback_data: "st:refresh" }]] });
 
 export class Status {
   herdrOk = false;
@@ -41,17 +42,17 @@ export class Status {
   text(h = this.health(), paused = false): string {
     const limits = esc(limitsLine(this.cfg));
     const dot = h.online ? "🟢" : "🟡";
-    const tgLine = h.telegram ? "正常" : h.lastPollAgoSec < 0 ? "尚未连上" : `${h.lastPollAgoSec}s 没有成功轮询`;
+    const tgLine = h.telegram ? tr("正常", "OK") : h.lastPollAgoSec < 0 ? tr("尚未连上", "not connected yet") : tr(`${h.lastPollAgoSec}s 没有成功轮询`, `no successful poll for ${h.lastPollAgoSec}s`);
     return [
-      `${dot} <b>tg-bridge ${h.online ? "在线" : "异常"}</b>`,
-      `Telegram：${tgLine}`,
-      `Herdr：${h.herdr ? "正常" : "连不上"}`,
-      `会话：${h.sessions} 个，运行中 ${h.working} 个`,
-      ...(limits ? [`额度：${limits}`] : []),
-      `启动于 ${new Date(h.startedAt).toLocaleString("zh-CN", { hour12: false })}`,
+      `${dot} <b>tg-bridge ${h.online ? tr("在线", "online") : tr("异常", "degraded")}</b>`,
+      `Telegram${tr("：", ": ")}${tgLine}`,
+      `Herdr${tr("：", ": ")}${h.herdr ? tr("正常", "OK") : tr("连不上", "unreachable")}`,
+      tr(`会话：${h.sessions} 个，运行中 ${h.working} 个`, `Sessions: ${h.sessions}, ${h.working} running`),
+      ...(limits ? [tr(`额度：${limits}`, `Limits: ${limits}`)] : []),
+      tr(`启动于 ${new Date(h.startedAt).toLocaleString(locale(), { hour12: false })}`, `Started ${new Date(h.startedAt).toLocaleString(locale(), { hour12: false })}`),
       paused
-        ? `<i>更新于 ${hhmmss()}。连续 ${this.streak} 次异常且没有变化，已停止自动刷新；状态一变会自动恢复，也可以点下面的按钮刷新</i>`
-        : `<i>更新于 ${hhmmss()}，超过 ${Math.ceil((this.cfg.statusIntervalSec * 3) / 60)} 分钟没更新就是 bridge 或电脑已离线</i>`,
+        ? tr(`<i>更新于 ${hhmmss()}。连续 ${this.streak} 次异常且没有变化，已停止自动刷新；状态一变会自动恢复，也可以点下面的按钮刷新</i>`, `<i>Updated ${hhmmss()}. Abnormal and unchanged ${this.streak} times in a row, so auto refresh is paused; it resumes when anything changes, or tap the button below</i>`)
+        : tr(`<i>更新于 ${hhmmss()}，超过 ${Math.ceil((this.cfg.statusIntervalSec * 3) / 60)} 分钟没更新就是 bridge 或电脑已离线</i>`, `<i>Updated ${hhmmss()}. No update for over ${Math.ceil((this.cfg.statusIntervalSec * 3) / 60)} min means the bridge or the computer is offline</i>`),
     ].join("\n");
   }
 
@@ -89,8 +90,8 @@ export class Status {
 
   private async pin(html: string) {
     const id = this.store.state.statusMessage;
-    if (id && (await this.tg.edit(id, html, { reply_markup: REFRESH }))) return;
-    const nid = await this.tg.send(undefined, html, { disable_notification: true, reply_markup: REFRESH });
+    if (id && (await this.tg.edit(id, html, { reply_markup: REFRESH() }))) return;
+    const nid = await this.tg.send(undefined, html, { disable_notification: true, reply_markup: REFRESH() });
     if (!nid) return;
     log("status", `status message ${id ?? "(none)"} gone, sent ${nid}`);
     this.store.state.statusMessage = nid;
@@ -102,7 +103,7 @@ export class Status {
     clearInterval(this.timer);
     if (this.workspaceId) await H.clearWorkspaceToken(this.workspaceId, "tg");
     const id = this.store.state.statusMessage;
-    const html = `🔴 <b>tg-bridge 已停止</b>\n原因：${reason}\n<i>${hhmmss()}</i>`;
+    const html = tr(`🔴 <b>tg-bridge 已停止</b>\n原因：${reason}\n<i>${hhmmss()}</i>`, `🔴 <b>tg-bridge stopped</b>\nReason: ${reason}\n<i>${hhmmss()}</i>`);
     if (id) await this.tg.edit(id, html);
   }
 }

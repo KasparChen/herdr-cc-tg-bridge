@@ -10,6 +10,7 @@ import type { Watcher } from "./session";
 import { Status } from "./status";
 import { Store } from "./store";
 import { Telegram } from "./telegram";
+import { tr } from "./i18n";
 
 const cfg = loadConfig();
 const store = new Store(cfg.stateDir);
@@ -21,7 +22,9 @@ const status = new Status(cfg, tg, store, watchers);
 if (process.argv[2] === "--mark-offline") {
   const H = await import("./herdr");
   status.workspaceId = await H.resolveWorkspace(cfg.workspace);
-  await status.offline(process.argv.slice(3).join(" ") || "进程退出");
+  const reason = process.argv.slice(3).join(" ");
+  const code = reason.match(/^exit:(\d+)$/)?.[1]; // from the supervisor, so the text follows TG_BRIDGE_LANG
+  await status.offline(code ? tr(`进程异常退出（退出码 ${code}），3 秒后自动重启`, `crashed (exit code ${code}), restarting in 3 s`) : reason || tr("进程退出", "process exited"));
   process.exit(0);
 }
 
@@ -30,7 +33,7 @@ const router = new Router(cfg, tg, store, watchers, status, life);
 for (const t of Object.keys(store.state.topics)) life.watch(Number(t));
 startControl(cfg, tg, store, status, router, life);
 status.start();
-tg.call("setMyCommands", { commands: COMMANDS, scope: { type: "chat", chat_id: cfg.chatId } }).catch(() => {});
+tg.call("setMyCommands", { commands: COMMANDS(), scope: { type: "chat", chat_id: cfg.chatId } }).catch(() => {});
 // deleted topics send no update; probe the bindings at start and then hourly
 const sweep = () => life.sweep().then(g => g.length && log("sweep removed", g)).catch(e => log("sweep", e));
 setInterval(sweep, 3600_000);
@@ -41,7 +44,7 @@ for (const sig of ["SIGINT", "SIGTERM", "SIGHUP"] as const) {
     if (stopping) return;
     stopping = true;
     log("stopping on", sig);
-    await status.offline(sig === "SIGHUP" ? "终端标签页被关闭" : "手动停止").catch(() => {});
+    await status.offline(sig === "SIGHUP" ? tr("终端标签页被关闭", "terminal tab closed") : tr("手动停止", "stopped by hand")).catch(() => {});
     process.exit(0);
   });
 }

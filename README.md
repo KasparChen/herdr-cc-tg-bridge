@@ -10,13 +10,68 @@ It is a small Bun program with no runtime dependencies. The command it installs 
 
 **中文说明见 [docs/README.zh-CN.md](docs/README.zh-CN.md)。**
 
+## Get started
+
+**You need:** a Mac (macOS 13 or later), a Claude plan that includes Claude Code (Pro, Max, Team, Enterprise, or a Console account), Telegram on your phone, and about 10 minutes. Linux should work but is untested.
+
+### 1. Create a bot (1 minute)
+
+In Telegram, open [@BotFather](https://t.me/BotFather), send `/newbot`, and pick a name and a username ending in `bot`. BotFather replies with a token like `123456789:AAH...`. Keep it private; use a new bot just for this.
+
+### 2. Run the installer (about 3 minutes)
+
+Open the Terminal app and paste:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KasparChen/herdr-cc-tg-bridge/main/install.sh | sh
+```
+
+It checks for Bun, Herdr and Claude Code, offers to install whatever is missing with their official installers, downloads this project to `~/.local/share/herdr-cc-tg-bridge`, and then asks for the bot token (typing is hidden).
+
+### 3. Set up the group (about 3 minutes, while the installer waits)
+
+1. Create a new group in Telegram and add your bot as a member.
+2. In the group's settings (Edit), turn on **Topics**.
+3. Still in the settings, open **Administrators**, add your bot, and switch on **Manage Topics**, **Pin Messages** and **Delete Messages**.
+4. Send the line the installer shows, for example `/start@your_bot 482913`, in the group. The number is a one-time code for this install.
+
+The installer then shows the group and the account it found. Type `y` if they are yours. Press Enter to keep the default session folder `~/tg-sessions`.
+
+### 4. Log in and try it (2 minutes)
+
+The installer ends by printing a line like this one. Run it, log in to Claude Code, choose to trust the folder when asked, then type `/exit`:
+
+```sh
+cd ~/tg-sessions && ~/.local/bin/claude
+```
+
+Now open the group. A pinned 🟢 message in General says the bridge is online. Send `/new` there: a new topic opens with a fresh Claude session. Write in that topic like you would in the terminal.
+
+Each message you send gets a reaction that shows where it is: 👀 received, ✍ Claude is on it, 🤔 waiting for your choice, and the mark disappears once the answer is in. Send `/help` in a topic for every command.
+
+### If something goes wrong
+
+| What you see | What to do |
+|---|---|
+| `command not found: claude` or `herdr` in a new terminal | Open a new terminal window (the installer added `~/.local/bin` to your PATH), or use the full path `~/.local/bin/claude` |
+| The installer keeps waiting for your group message | Check that the bot is in the group, Topics are on, and the message includes the code. Send it again |
+| "The bot lacks the admin right ..." | Switch that right on in the group's Administrators settings, then press Enter |
+| The pinned status is 🟡 with "Herdr unreachable" | Run `~/.local/bin/herdr` once. Needed again after every restart of the computer |
+| A topic answers "The session is waiting for you" right away | Claude is asking whether to trust the folder. Run the line from step 4 once, or send `/keys enter` in the topic |
+| Your message gets no reaction at all | The bridge did not receive it: the computer is asleep or offline, or the bridge stopped. Check with `~/.local/share/herdr-cc-tg-bridge/bin/tg-bridge status`; the log is `~/.tg-bridge/bridge.log` |
+| You want to change the bot or the group | Run the installer again |
+
+To remove it: `sh ~/.local/share/herdr-cc-tg-bridge/install.sh --uninstall` stops the background service and keeps your files.
+
+**Good to know.** Only your Telegram account can use the bridge, and through Claude Code it can run commands on your computer, so keep the bot token private. The computer has to be on and awake: closing the lid puts it to sleep, and messages wait until it wakes. The installer is new; if it fails for you, please [open an issue](https://github.com/KasparChen/herdr-cc-tg-bridge/issues) with the terminal output. Prefer Chinese prompts? Add `-s -- --lang zh` after `sh`.
+
 ## What it looks like
 
 Every turn shows up in the topic as one collapsible progress bubble that updates live, then the final answer:
 
 ```text
-┃ ✅ 完成                                     ← collapsed view: three lines
-┃ 🔧 3 次调用 · 14s · ctx 27% (269k)           (status · tool calls · elapsed · context)
+┃ ✅ Done                                     ← collapsed view: three lines
+┃ 🔧 3 calls · 14s · ctx 27% (269k)            (status · tool calls · elapsed · context)
 ┃ ...
 ┃ 💬 Checking the OS version and disk space first.
 ┃ 💻 Running sw_vers
@@ -130,13 +185,15 @@ Design notes, trade-offs and the record of decisions: [docs/PRD-v1.md](docs/PRD-
 
 - macOS (Linux should work but is untested; `bin/install-launchd` and `caffeinate` are macOS only)
 - [Bun](https://bun.sh) (tested with 1.3.14)
-- [Herdr](https://herdr.dev) ([source](https://github.com/herdrdev/herdr), tested with 0.8.0; 0.9.x untested), with its Claude integration: `herdr integration install claude`
+- [Herdr](https://herdr.dev) ([source](https://github.com/herdrdev/herdr), tested with 0.8.0; the installer gets the latest, 0.9.x is untested), with its Claude integration: `herdr integration install claude`
 - [Claude Code](https://code.claude.com/docs)
-- `python3` and `curl` (used by `bin/tg-send` and `bin/tg-bind`)
+- `python3` (Herdr's Claude hook is a Python script) and `curl`
 
 Only sessions started after the Herdr integration is installed can be bridged.
 
-## Setup
+## Manual setup
+
+The installer does all of this for you. These are the same steps by hand, for Linux or a custom setup.
 
 1. **Create a bot.** Message [@BotFather](https://t.me/BotFather), send `/newbot`, keep the token.
 2. **Create a group.** Turn on *Topics* in the group settings (it becomes a supergroup). Add the bot as an admin with **Manage Topics**, **Delete Messages** (for `/delete`) and **Pin Messages** (the status message is pinned). As an admin it receives all messages; no need to change privacy mode.
@@ -154,11 +211,12 @@ Only sessions started after the Herdr integration is installed can be bridged.
    | `TELEGRAM_BOT_TOKEN` | yes | Bot token. Can also come from the environment instead of `.env` |
    | `TG_CHAT_ID` | yes | Group id |
    | `TG_ALLOWED_USERS` | yes | Comma-separated user ids allowed to drive sessions; everyone else is ignored |
-   | `TG_BRIDGE_WORKDIR` | yes | Working directory for new sessions (where `CLAUDE.md` is picked up) |
+   | `TG_BRIDGE_WORKDIR` | yes | Working directory for new sessions (where `CLAUDE.md` is picked up). Use a folder inside your home directory, not the home directory itself: Claude Code asks again on every start whether to trust it |
    | `HERDR_WORKSPACE` | no | Herdr workspace (id or label) for new sessions |
    | `TG_AUTOSEND_EXT` | no | Extensions sent back automatically; `md` and `txt` are off by default |
    | `TG_CLAUDE_ARGS` | no | Extra arguments for `claude` in new sessions |
    | `TG_USAGE_FILE`, `TG_FABLE_USAGE_FILE` | no | JSON files with plan limits to display (format in `.env.example`) |
+   | `TG_BRIDGE_LANG` | no | Language of the bot's messages: `en` (default) or `zh` |
    | `TG_BRIDGE_CAFFEINATE` | no | `0` lets the Mac idle-sleep while the bridge runs |
 
    See [.env.example](.env.example) for the rest.
@@ -225,6 +283,8 @@ Verified end to end on macOS: text round trips with the progress bubble, photo u
 
 The session lifecycle (close, reopen, resume after `/exit` or a closed tab, delete, deleted-topic detection, `/sessions`, `/tg-bind`, context and limit display) was verified through `/sim` and the Bot API. With real Telegram input: creating and renaming a topic by hand, the close button in `/sessions`, and `/delete` with its confirm button.
 
+The installer was tested on macOS against a mocked Bot API, and with dry runs in UTF-8 and C locales, in English and Chinese, run directly and piped through `sh`. It has not yet run end to end on a fresh machine, and the Linux path is untested. The message reactions and `/resend` were verified with a simulated Telegram API; the English bot messages were checked by rendering them.
+
 Not yet verified with real Telegram input: tapping the question buttons, closing or reopening a topic in the client, the 80% context warning, recovery after a real network outage, and starting at an actual reboot.
 
 ## Limits
@@ -235,7 +295,7 @@ Not yet verified with real Telegram input: tapping the question buttons, closing
 - Turns without tool calls have no bubble, so they show no context reading; `/sessions` has it.
 - Anyone on the allowlist can do whatever the session's permission mode allows, including running commands. Protect your Telegram account.
 - Herdr's server must be running (open Herdr once after boot); the bridge does not start it.
-- The bot's own messages (status, notices, errors) are in Chinese. They live in `src/router.ts`, `src/lifecycle.ts`, `src/session.ts`, `src/status.ts` and `src/render.ts` if you want to translate them.
+- The bot's own messages (status, notices, buttons, the `/` menu) are in English or Chinese, set by `TG_BRIDGE_LANG` (`en` by default; the installer writes the language you ran it in). Other languages need a third string in each `tr()` call in `src/`.
 
 ## Development
 

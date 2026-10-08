@@ -2,6 +2,7 @@
 // integration reports ("⛁ 43% (430k)"); plan limits come from optional JSON files the user's status line keeps fresh.
 import { existsSync, readFileSync } from "fs";
 import type { Config } from "./config";
+import { tr } from "./i18n";
 
 export type Ctx = { text: string; pct?: number };
 
@@ -32,7 +33,7 @@ export function limitsLine(cfg: Pick<Config, "usageFile" | "fableUsageFile">, no
   const seg = (name: string, pct: unknown, reset?: number) => {
     if (typeof pct !== "number") return;
     const l = left(reset, now);
-    parts.push(`${name} ${Math.round(pct)}%${l ? `（${l} 后重置）` : ""}`);
+    parts.push(`${name} ${Math.round(pct)}%${l ? tr(`（${l} 后重置）`, ` (resets in ${l})`) : ""}`);
   };
   seg("5h", u?.five_hour?.used_percentage, u?.five_hour?.resets_at);
   seg("7d", u?.seven_day?.used_percentage, u?.seven_day?.resets_at);
@@ -40,5 +41,5 @@ export function limitsLine(cfg: Pick<Config, "usageFile" | "fableUsageFile">, no
   if (!parts.length) return "";
   const at = Math.max(u?.updated_at ?? 0, f?.fetched_at ?? 0);
   const mins = at ? Math.floor((now / 1000 - at) / 60) : -1;
-  return parts.join(" · ") + (mins >= 2 ? ` · 更新于 ${mins} 分钟前` : "");
+  return parts.join(" · ") + (mins >= 2 ? tr(` · 更新于 ${mins} 分钟前`, ` · updated ${mins} min ago`) : "");
 }

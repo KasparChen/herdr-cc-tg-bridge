@@ -6,6 +6,7 @@ import { mkdirSync } from "fs";
 import { dirname } from "path";
 import { log } from "./log";
 import { stripTags } from "./render";
+import { tr } from "./i18n";
 
 const PHOTO_EXT = new Set(["png", "jpg", "jpeg", "webp"]);
 export const MAX_DOWNLOAD = 20 * 1024 * 1024;
@@ -147,7 +148,7 @@ export class Telegram {
     const file = Bun.file(path);
     if (!(await file.exists())) return "failed";
     if (file.size > MAX_UPLOAD) {
-      await this.send(thread, `⚠️ 文件超过 50MB，没法发送：<code>${path}</code>`);
+      await this.send(thread, tr(`⚠️ 文件超过 50MB，没法发送：<code>${path}</code>`, `⚠️ File over 50 MB, cannot send: <code>${path}</code>`));
       return "failed";
     }
     const ext = path.split(".").pop()?.toLowerCase() ?? "";

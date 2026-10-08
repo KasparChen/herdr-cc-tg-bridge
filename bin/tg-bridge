@@ -29,6 +29,6 @@ while :; do
   code=$?
   [ "$code" -eq 0 ] && exit 0
   echo "$(date '+%F %T') bridge exited with ${code}, restarting in 3s"
-  bun src/main.ts --mark-offline "进程异常退出（退出码 ${code}），3 秒后自动重启" >/dev/null 2>&1
+  bun src/main.ts --mark-offline "exit:${code}" >/dev/null 2>&1
   sleep 3
 done

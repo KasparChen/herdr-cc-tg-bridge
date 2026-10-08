@@ -9,6 +9,28 @@ import { pickOutbox } from "../src/outbox";
 import { bubble, fmtSecs, md2html, mdChunks, stripTags, tables2bullets, toolLine } from "../src/render";
 import { parseLine, TranscriptTail } from "../src/transcript";
 
+// the assertions below are in Chinese; the "english" block switches the language for its own checks
+process.env.TG_BRIDGE_LANG = "zh";
+
+describe("english", () => {
+  const withEn = (f: () => void) => { process.env.TG_BRIDGE_LANG = "en"; try { f(); } finally { process.env.TG_BRIDGE_LANG = "zh"; } };
+  test("bubble, ago and limits read in English", () => withEn(() => {
+    expect(bubble([], 1, 0, true)).toBe("<blockquote expandable><b>✅ Done</b>\n<i>🔧 1 call · 0s</i></blockquote>");
+    expect(bubble([], 2, 0, false).startsWith("<blockquote expandable><b>⚙️ Working</b>\n<i>🔧 2 calls")).toBe(true);
+    const now = 1_800_000_000_000;
+    expect(ago(now - 30_000, now)).toBe("just now");
+    expect(ago(now - 5 * 60_000, now)).toBe("5 min ago");
+    expect(tables2bullets("| a | b |\n|---|---|\n| x | y |\n")).toBe("• **x**\n  b: y\n");
+  }));
+  test("an unset or unknown language falls back to English", () => {
+    for (const v of [undefined, "fr"]) {
+      if (v === undefined) delete process.env.TG_BRIDGE_LANG; else process.env.TG_BRIDGE_LANG = v;
+      expect(ago(Date.now() - 1000)).toBe("just now");
+    }
+    process.env.TG_BRIDGE_LANG = "zh";
+  });
+});
+
 describe("render", () => {
   test("bubble keeps the three-line collapsed header", () => {
     const html = bubble(["💻 Running date", "💬 checking"], 1, 65, false);

@@ -11,6 +11,7 @@ import type { Binding, Store } from "./store";
 import type { Telegram } from "./telegram";
 import { parseLine } from "./transcript";
 import { parseCtx } from "./usage";
+import { tr } from "./i18n";
 
 const SPAWN_PROMPT = (tgSend: string) =>
   `This Claude Code session is being driven from a Telegram forum topic through tg-bridge; the user reads your replies on a phone. ` +
@@ -21,7 +22,7 @@ const SPAWN_PROMPT = (tgSend: string) =>
 export const ago = (t: number | undefined, now = Date.now()) => {
   if (!t) return "";
   const m = Math.floor((now - t) / 60000);
-  return m < 1 ? "刚刚" : m < 60 ? `${m} 分钟前` : m < 1440 ? `${Math.floor(m / 60)} 小时前` : `${Math.floor(m / 1440)} 天前`;
+  return m < 1 ? tr("刚刚", "just now") : m < 60 ? tr(`${m} 分钟前`, `${m} min ago`) : m < 1440 ? tr(`${Math.floor(m / 60)} 小时前`, `${Math.floor(m / 60)} h ago`) : tr(`${Math.floor(m / 1440)} 天前`, `${Math.floor(m / 1440)} d ago`);
 };
 
 // terminal titles carry Claude's spinner / status glyph in front ("◐ ", "✳ ")
@@ -43,10 +44,10 @@ export function lastExchange(text: string): { ask?: string; answer?: string; tit
   return { ask, answer, title };
 }
 
-const STATE_LABEL: Record<string, string> = {
-  working: "🔵 运行中", blocked: "⏸ 等你操作", idle: "🟢 空闲", done: "🟢 空闲",
-  exited: "⚪ 已退出", gone: "⚪ 标签页已关", unknown: "❔ Herdr 连不上", closed: "🔒 已关闭",
-};
+const STATE_LABEL = (): Record<string, string> => ({
+  working: tr("🔵 运行中", "🔵 running"), blocked: tr("⏸ 等你操作", "⏸ waiting for you"), idle: tr("🟢 空闲", "🟢 idle"), done: tr("🟢 空闲", "🟢 idle"),
+  exited: tr("⚪ 已退出", "⚪ exited"), gone: tr("⚪ 标签页已关", "⚪ tab closed"), unknown: tr("❔ Herdr 连不上", "❔ Herdr unreachable"), closed: tr("🔒 已关闭", "🔒 closed"),
+});
 
 export class Lifecycle {
   private checking = new Set<number>();
@@ -84,13 +85,13 @@ export class Lifecycle {
     const old = this.store.state.topics[thread];
     // a closed desktop session is normally still running, so look at the pane even when the binding is closed
     const st = old ? await H.paneState(old.pane, old.terminal) : undefined;
-    if (st?.state === "unknown") { await this.tg.notice(thread, "⚠️ Herdr 连不上，没法开会话。打开电脑上的 Herdr 后再试"); return false; }
+    if (st?.state === "unknown") { await this.tg.notice(thread, tr("⚠️ Herdr 连不上，没法开会话。打开电脑上的 Herdr 后再试", "⚠️ Cannot reach Herdr, so no session can be opened. Open Herdr on the computer and try again")); return false; }
     if (old?.closedAt) await this.tg.call("reopenForumTopic", { chat_id: this.cfg.chatId, message_thread_id: thread });
     if (st?.state === "live" && !opts.fresh) {
       if (old!.closedAt) {
         old!.closedAt = undefined;
         this.store.save();
-        await this.tg.notice(thread, `🔗 已重新连上 · ${await this.where(st.agent!.workspace_id, cleanTitle(st.agent!.terminal_title_stripped))}`);
+        await this.tg.notice(thread, `${tr("🔗 已重新连上", "🔗 Reconnected")} · ${await this.where(st.agent!.workspace_id, cleanTitle(st.agent!.terminal_title_stripped))}`);
       }
       this.watch(thread);
       return true;
@@ -106,7 +107,7 @@ export class Lifecycle {
       pane: st?.state === "exited" && !old!.attached ? old!.pane : undefined,
       args: [...(resume ? ["--resume", old!.session!] : []), "--append-system-prompt", SPAWN_PROMPT(this.tgSendPath), ...this.cfg.claudeArgs],
     });
-    if (!s) { await this.tg.notice(thread, "❌ 开会话失败，Herdr 没有返回窗格"); return false; }
+    if (!s) { await this.tg.notice(thread, tr("❌ 开会话失败，Herdr 没有返回窗格", "❌ Could not open a session: Herdr returned no pane")); return false; }
     this.unwatch(thread);
     this.store.state.topics[thread] = {
       ...(old ?? { cwd: this.cfg.workdir, name: opts.name, autoName: opts.autoName ?? false }),
@@ -118,7 +119,7 @@ export class Lifecycle {
     this.store.save();
     this.watch(thread);
     log("open", thread, { resume, pane: s.pane, reusedPane: st?.state === "exited" });
-    await this.tg.notice(thread, `${resume ? "🔄 已接回原会话" : "🟢 新会话已就绪"} · ${await this.where(ws, label)}`);
+    await this.tg.notice(thread, `${resume ? tr("🔄 已接回原会话", "🔄 Resumed the session") : tr("🟢 新会话已就绪", "🟢 New session ready")} · ${await this.where(ws, label)}`);
     return true;
   }
 
@@ -140,7 +141,7 @@ export class Lifecycle {
     if (!session) return { ok: false, error: "Herdr has no session id for this pane: the session was started before `herdr integration install claude`, so its transcript cannot be found" };
     const path = findTranscript(a.cwd, session);
     const ex = existsSync(path) ? lastExchange(readFileSync(path, "utf8")) : {};
-    const title = cut(ex.title || cleanTitle(a.terminal_title_stripped) || "电脑会话", 120);
+    const title = cut(ex.title || cleanTitle(a.terminal_title_stripped) || tr("电脑会话", "Desktop session"), 120);
     const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, name: title });
     if (!j.ok) return { ok: false, error: `createForumTopic failed: ${j.description}` };
     const thread: number = j.result.message_thread_id;
@@ -151,10 +152,10 @@ export class Lifecycle {
     this.store.save();
     const ctx = parseCtx(a.tokens?.context);
     const card = [
-      `🔗 <b>已从电脑接过来</b> · ${await this.where(a.workspace_id, cleanTitle(a.terminal_title_stripped))}`,
-      `目录 <code>${esc(a.cwd.replace(homedir(), "~"))}</code>${ctx ? ` · ctx ${esc(ctx.text)}` : ""}`,
-      ex.ask ? `上一轮你问的是「${esc(cut(ex.ask.replace(/\s+/g, " "), 300))}」，回答在下面` : "",
-      "在这里发消息，就是在电脑上那个会话里发。关闭或删除这个话题只断开 Telegram，电脑上的会话继续开着",
+      `🔗 <b>${tr("已从电脑接过来", "Taken over from the computer")}</b> · ${await this.where(a.workspace_id, cleanTitle(a.terminal_title_stripped))}`,
+      `${tr("目录", "Folder")} <code>${esc(a.cwd.replace(homedir(), "~"))}</code>${ctx ? ` · ctx ${esc(ctx.text)}` : ""}`,
+      ex.ask ? tr(`上一轮你问的是「${esc(cut(ex.ask.replace(/\s+/g, " "), 300))}」，回答在下面`, `Last time you asked "${esc(cut(ex.ask.replace(/\s+/g, " "), 300))}"; the answer is below`) : "",
+      tr("在这里发消息，就是在电脑上那个会话里发。关闭或删除这个话题只断开 Telegram，电脑上的会话继续开着", "Messages here go to that session on the computer. Closing or deleting this topic only disconnects Telegram; the session keeps running"),
     ].filter(Boolean).join("\n");
     await this.tg.notice(thread, card);
     if (ex.answer) for (const c of mdChunks(ex.answer)) await this.tg.send(thread, c);
@@ -175,9 +176,9 @@ export class Lifecycle {
       this.store.save();
       log("close", thread, { byClient, attached: !!b.attached });
     }
-    await this.tg.notice(thread, !b ? "🔒 话题已关闭"
-      : b.attached ? "🔒 已断开，电脑上的会话继续开着。重新打开话题，或者在这里发消息，会重新连上"
-      : "🔒 会话已结束，话题已关闭。重新打开话题，或者在这里发消息，会接着原会话");
+    await this.tg.notice(thread, !b ? tr("🔒 话题已关闭", "🔒 Topic closed")
+      : b.attached ? tr("🔒 已断开，电脑上的会话继续开着。重新打开话题，或者在这里发消息，会重新连上", "🔒 Disconnected; the session keeps running on the computer. Reopen the topic or write here to reconnect")
+      : tr("🔒 会话已结束，话题已关闭。重新打开话题，或者在这里发消息，会接着原会话", "🔒 Session ended and topic closed. Reopen the topic or write here to resume it"));
     if (!byClient) await this.tg.call("closeForumTopic", { chat_id: this.cfg.chatId, message_thread_id: thread });
   }
 
@@ -246,28 +247,28 @@ export class Lifecycle {
       const ctx = parseCtx(st?.agent?.tokens?.context);
       const name = this.name(thread, b);
       const when = ago(state === "closed" ? b.closedAt : b.lastActive);
-      const bits = [STATE_LABEL[state] ?? state, `<a href="${this.link(thread)}">${esc(cut(name, 40))}</a>`, b.attached ? "电脑会话" : "", ctx ? `ctx ${esc(ctx.text)}` : "", when];
+      const bits = [STATE_LABEL()[state] ?? state, `<a href="${this.link(thread)}">${esc(cut(name, 40))}</a>`, b.attached ? tr("电脑会话", "desktop") : "", ctx ? `ctx ${esc(ctx.text)}` : "", when];
       lines.push(bits.filter(Boolean).join(" · "));
       const short = cut(name, 12);
-      const del = { text: `删除 ${short}`, callback_data: `lc:delask:${thread}` };
-      if (state === "closed") keyboard.push([{ text: `重开 ${short}`, callback_data: `lc:resume:${thread}:l` }, del]);
-      else if (state === "exited" || state === "gone") keyboard.push([{ text: `接回 ${short}`, callback_data: `lc:resume:${thread}:l` }, del]);
-      else if (state !== "unknown") keyboard.push([{ text: `关闭 ${short}`, callback_data: `lc:close:${thread}:l` }, del]);
+      const del = { text: tr(`删除 ${short}`, `Delete ${short}`), callback_data: `lc:delask:${thread}` };
+      if (state === "closed") keyboard.push([{ text: tr(`重开 ${short}`, `Reopen ${short}`), callback_data: `lc:resume:${thread}:l` }, del]);
+      else if (state === "exited" || state === "gone") keyboard.push([{ text: tr(`接回 ${short}`, `Resume ${short}`), callback_data: `lc:resume:${thread}:l` }, del]);
+      else if (state !== "unknown") keyboard.push([{ text: tr(`关闭 ${short}`, `Close ${short}`), callback_data: `lc:close:${thread}:l` }, del]);
     }
-    const out = [`<b>会话 ${rows.length} 个</b>`, ...lines];
-    if (!rows.length) out.push("还没有会话。发 /new 名字 新建一个，或者在电脑上的会话里用 /tg-bind");
-    if (removed.length) out.push(`<i>话题已被删除，已移除 ${removed.length} 个绑定</i>`);
-    if (limits) out.push(`<i>额度 ${esc(limits)}</i>`);
+    const out = [tr(`<b>会话 ${rows.length} 个</b>`, `<b>${rows.length} session${rows.length === 1 ? "" : "s"}</b>`), ...lines];
+    if (!rows.length) out.push(tr("还没有会话。发 /new 名字 新建一个，或者在电脑上的会话里用 /tg-bind", "No sessions yet. Send /new name to start one, or use /tg-bind in a session on the computer"));
+    if (removed.length) out.push(tr(`<i>话题已被删除，已移除 ${removed.length} 个绑定</i>`, `<i>Topics were deleted; removed ${removed.length} binding${removed.length === 1 ? "" : "s"}</i>`));
+    if (limits) out.push(`<i>${tr("额度", "Limits")} ${esc(limits)}</i>`);
     return { html: out.join("\n"), keyboard };
   }
 
   // confirmation for deleting, shared by /delete and the list buttons
   deletePrompt(thread: number) {
     const b = this.store.state.topics[thread];
-    const what = b?.attached ? "电脑上的会话继续开着，" : "会话会结束，";
+    const what = b?.attached ? tr("电脑上的会话继续开着，", "The session keeps running on the computer; ") : tr("会话会结束，", "The session ends; ");
     return {
-      html: `确定删除「${esc(cut(this.name(thread, b), 40))}」吗？${what}话题和全部聊天记录一起删除，没法恢复`,
-      keyboard: [[{ text: "确认删除", callback_data: `lc:delete:${thread}` }, { text: "取消", callback_data: `lc:cancel:${thread}` }]],
+      html: tr(`确定删除「${esc(cut(this.name(thread, b), 40))}」吗？${what}话题和全部聊天记录一起删除，没法恢复`, `Delete "${esc(cut(this.name(thread, b), 40))}"? ${what}the topic and all its messages are deleted for good`),
+      keyboard: [[{ text: tr("确认删除", "Delete"), callback_data: `lc:delete:${thread}` }, { text: tr("取消", "Cancel"), callback_data: `lc:cancel:${thread}` }]],
     };
   }
 }

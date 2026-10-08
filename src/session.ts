@@ -12,6 +12,7 @@ import type { Binding, Store } from "./store";
 import { REACT, type SendState, type Telegram } from "./telegram";
 import { TranscriptTail, transcriptPath, type TEvent } from "./transcript";
 import { parseCtx, type Ctx } from "./usage";
+import { tr } from "./i18n";
 
 type Turn = {
   bubble?: number; lines: string[]; texts: string[]; calls: number; t0: number;
@@ -118,14 +119,14 @@ export class Watcher {
     this.bind.notified = true;
     this.store.save();
     const resumable = !!this.bind.session && existsSync(findTranscript(this.bind.cwd, this.bind.session));
-    const what = state === "exited" ? "这个会话在电脑上退出了" : "电脑上这个会话的标签页关掉了";
-    const next = resumable ? "直接发消息会接着原会话" : "直接发消息会开一个新会话";
+    const what = state === "exited" ? tr("这个会话在电脑上退出了", "This session exited on the computer") : tr("电脑上这个会话的标签页关掉了", "This session's tab was closed on the computer");
+    const next = resumable ? tr("直接发消息会接着原会话", "send a message to resume it") : tr("直接发消息会开一个新会话", "send a message to start a new session");
     const row = [
-      ...(resumable ? [{ text: "接着原会话", callback_data: `lc:resume:${this.thread}` }] : []),
-      { text: "开新会话", callback_data: `lc:fresh:${this.thread}` },
-      { text: "关闭话题", callback_data: `lc:close:${this.thread}` },
+      ...(resumable ? [{ text: tr("接着原会话", "Resume"), callback_data: `lc:resume:${this.thread}` }] : []),
+      { text: tr("开新会话", "New session"), callback_data: `lc:fresh:${this.thread}` },
+      { text: tr("关闭话题", "Close topic"), callback_data: `lc:close:${this.thread}` },
     ];
-    await this.tg.notice(this.thread, `⚪ ${what}。${next}`, { reply_markup: { inline_keyboard: [row] } });
+    await this.tg.notice(this.thread, tr(`⚪ ${what}。${next}`, `⚪ ${what}; ${next}.`), { reply_markup: { inline_keyboard: [row] } });
   }
 
   private async onEvent(ev: TEvent) {
@@ -207,9 +208,9 @@ export class Watcher {
   // /resend: the parts of the last answer that did not surely arrive
   async resend() {
     const a = this.lastAnswer;
-    if (!a) { await this.tg.send(this.thread, "没有可以重发的回答。上一轮回答只存在内存里，bridge 重启后就没有了，可以在 Herdr 标签页里看"); return; }
+    if (!a) { await this.tg.send(this.thread, tr("没有可以重发的回答。上一轮回答只存在内存里，bridge 重启后就没有了，可以在 Herdr 标签页里看", "Nothing to send again. The last answer is kept in memory only and is gone after a bridge restart; it is still in the Herdr tab")); return; }
     const todo = a.items.filter(i => i.state !== "ok");
-    if (!todo.length) { await this.tg.send(this.thread, "上一轮回答已经全部发出"); return; }
+    if (!todo.length) { await this.tg.send(this.thread, tr("上一轮回答已经全部发出", "The whole last answer has already arrived")); return; }
     await this.deliver(a, new Set(todo));
     log("resend", this.thread, todo.map(i => i.state));
   }
@@ -221,7 +222,7 @@ export class Watcher {
     if (pct >= CTX_WARN && !this.bind.ctxWarned) {
       this.bind.ctxWarned = true;
       this.store.save();
-      await this.tg.notice(this.thread, `⚠️ 上下文已用 ${esc(this.ctx!.text)}。可以发 <code>/clear</code> 清空，或者用 /new 开一个新会话`);
+      await this.tg.notice(this.thread, tr(`⚠️ 上下文已用 ${esc(this.ctx!.text)}。可以发 <code>/clear</code> 清空，或者用 /new 开一个新会话`, `⚠️ Context is at ${esc(this.ctx!.text)}. Send <code>/clear</code> to empty it, or /new for a new session`));
     } else if (pct < CTX_WARN / 2 && this.bind.ctxWarned) {
       this.bind.ctxWarned = undefined;
       this.store.save();
@@ -246,7 +247,7 @@ export class Watcher {
       }
     }
     const screen = (await H.paneRead(this.bind.pane)).split("\n").filter(l => l.trim()).slice(-18).join("\n");
-    await this.tg.send(this.thread, `⏸ 会话在等你操作。可以用 /keys 回应，例如 <code>/keys down enter</code>、<code>/keys esc</code>\n<pre>${esc(cut(screen, 3200))}</pre>`);
+    await this.tg.send(this.thread, tr("⏸ 会话在等你操作。可以用 /keys 回应，例如 <code>/keys down enter</code>、<code>/keys esc</code>", "⏸ The session is waiting for you. Answer with /keys, e.g. <code>/keys down enter</code> or <code>/keys esc</code>") + `\n<pre>${esc(cut(screen, 3200))}</pre>`);
   }
 
   private async onTitle(title: string) {

@@ -1,5 +1,6 @@
 // Telegram HTML rendering: tg-fold style progress bubble, Markdown -> HTML, chunking.
 import { homedir } from "os";
+import { tr } from "./i18n";
 
 export const esc = (s: string) => s.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 export const stripTags = (s: string) => s.replace(/<[^>]+>/g, "").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&amp;/g, "&");
@@ -29,7 +30,7 @@ export const isComment = (line: string) => /^(💬|🖥)/u.test(line);
 
 // Collapsed view shows the first three lines: status, counters, "...".
 export function bubble(lines: string[], calls: number, secs: number, done: boolean, max = 3600, extra = ""): string {
-  const head = `<b>${done ? "✅ 完成" : "⚙️ 执行中"}</b>\n<i>🔧 ${calls} 次调用 · ${fmtSecs(secs)}${extra ? ` · ${esc(extra)}` : ""}</i>`;
+  const head = `<b>${done ? tr("✅ 完成", "✅ Done") : tr("⚙️ 执行中", "⚙️ Working")}</b>\n<i>🔧 ${tr(`${calls} 次调用`, `${calls} call${calls === 1 ? "" : "s"}`)} · ${fmtSecs(secs)}${extra ? ` · ${esc(extra)}` : ""}</i>`;
   let body = lines.map(l => (isComment(l) ? `<b>${esc(l)}</b>` : esc(l)));
   while (body.length && body.join("\n").length > max) body = body.slice(1);
   return `<blockquote expandable>${head}${body.length ? "\n...\n" + body.join("\n") : ""}</blockquote>`;
@@ -41,7 +42,7 @@ export function tables2bullets(md: string): string {
     const rows = block.trim().split("\n").map(r => r.trim().replace(/^\||\|$/g, "").split("|").map(c => c.trim()));
     if (rows.length < 2 || !rows[1].every(c => /^:?-{2,}:?$/.test(c))) return block;
     const [head, , ...body] = rows;
-    return body.map(r => `• **${r[0]}**\n` + r.slice(1).map((c, i) => `  ${head[i + 1]}：${c}`).join("\n")).join("\n") + "\n";
+    return body.map(r => `• **${r[0]}**\n` + r.slice(1).map((c, i) => `  ${head[i + 1]}${tr("：", ": ")}${c}`).join("\n")).join("\n") + "\n";
   });
 }
 

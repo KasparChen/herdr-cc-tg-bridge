@@ -3,3 +3,5 @@
 node_modules/
 spike/state.json
 spike/bridge.log
+.env.*
+!.env.example

@@ -4,6 +4,61 @@
 
 这是一个用 Bun 写的小程序，没有运行时依赖，装好后的命令名叫 `tg-bridge`。本项目是个人独立项目，与 Anthropic 没有关联，也没有得到 Anthropic 的认可。它运行的是官方原版 Claude Code，用的是你自己的账号。
 
+## 快速上手
+
+**需要准备**一台 Mac（macOS 13 或更新），一个包含 Claude Code 的 Claude 套餐（Pro、Max、Team、Enterprise 或 Console 账号都可以），手机上的 Telegram，大约 10 分钟。Linux 理论上可用，还没测过。
+
+### 1. 新建一个 bot（1 分钟）
+
+在 Telegram 里打开 [@BotFather](https://t.me/BotFather)，发送 `/newbot`，按提示取一个名字，再取一个以 `bot` 结尾的用户名。BotFather 会回复一串 token，形如 `123456789:AAH...`。token 不要给别人，最好专门新建一个 bot 给它用。
+
+### 2. 运行安装脚本（约 3 分钟）
+
+打开「终端」App，粘贴下面这行。
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/KasparChen/herdr-cc-tg-bridge/main/install.sh | sh -s -- --lang zh
+```
+
+脚本会检查 Bun、Herdr、Claude Code，缺哪个就用官方安装脚本装上，装之前会问你一次。然后把项目下载到 `~/.local/share/herdr-cc-tg-bridge`，再让你粘贴 bot token，输入时屏幕上不显示。
+
+### 3. 建群（约 3 分钟，脚本会等你）
+
+1. 在 Telegram 里新建一个群，成员里加上你的 bot。
+2. 打开群设置（编辑），打开「话题」（Topics）。
+3. 还是在群设置里，进「管理员」，把 bot 添加为管理员，打开「管理话题」「置顶消息」「删除消息」三项。
+4. 在群里发送脚本显示的那一行，例如 `/start@your_bot 482913`。后面的数字是这次安装的一次性口令。
+
+脚本随后列出它认出的群和账号，确认是你自己的就输入 `y`。会话目录直接回车，用默认的 `~/tg-sessions`。
+
+### 4. 登录并试用（2 分钟）
+
+安装结束时会打印类似下面的一行。运行它，按提示登录 Claude Code，问到「是否信任此文件夹」时选信任，然后输入 `/exit` 退出。
+
+```sh
+cd ~/tg-sessions && ~/.local/bin/claude
+```
+
+然后打开群。General 里有一条置顶的 🟢 消息，说明 bridge 已在线。在 General 里发 `/new`，会出现一个新话题，里面是一个全新的 Claude 会话。在这个话题里发消息，就和在终端里打字一样。
+
+你发的每条消息上都会有一个 reaction，表示它走到了哪一步。👀 是收到了，✍ 是 Claude 正在处理，🤔 是在等你选择，回答发完后标记消失。在话题里发 `/help` 可以看全部命令。
+
+### 遇到问题
+
+| 你看到的 | 怎么办 |
+|---|---|
+| 新开的终端里提示找不到 `claude` 或 `herdr` | 重新开一个终端窗口（脚本已经把 `~/.local/bin` 加进 PATH），或者用完整路径 `~/.local/bin/claude` |
+| 脚本一直在等群里的消息 | 检查 bot 是否在群里、话题有没有打开、消息里有没有带口令，然后再发一次 |
+| 提示「bot 缺少管理员权限」 | 在群的管理员设置里打开对应的权限，再回车 |
+| 置顶状态是 🟡，显示 Herdr 连不上 | 运行一次 `~/.local/bin/herdr`。每次电脑重启后都要这样做一次 |
+| 话题里一开始就回复「会话在等你操作」 | Claude 在问是否信任这个文件夹。运行一次第 4 步那一行，或者在话题里发 `/keys enter` |
+| 发出的消息上一直没有任何 reaction | bridge 没收到。可能是电脑睡着了、断网了，或者 bridge 停了。用 `~/.local/share/herdr-cc-tg-bridge/bin/tg-bridge status` 查看，日志在 `~/.tg-bridge/bridge.log` |
+| 想换 bot 或换群 | 重新运行一次安装脚本 |
+
+卸载用 `sh ~/.local/share/herdr-cc-tg-bridge/install.sh --uninstall`，只停掉后台服务，文件保留。
+
+**需要知道的几点。** 只有你自己的 Telegram 账号能用这个 bridge，而它能通过 Claude Code 在你电脑上执行命令，所以 bot token 一定不要外传。电脑要开着且没有睡眠，合上盖子会睡眠，消息会等到电脑醒来再处理。安装脚本刚做好，如果装不上，请把终端输出贴到 [issue](https://github.com/KasparChen/herdr-cc-tg-bridge/issues) 里。想要英文提示，去掉命令最后的 `-s -- --lang zh` 即可。
+
 ## 能做什么
 
 - 在话题外发 `/new 名字`，bridge 会新建一个话题，同时在 Herdr 里开一个标签页启动 Claude。
@@ -16,7 +71,11 @@
 - 会话起好标题后，话题名和 Herdr 标签页名会同步改成这个标题。
 - 桥接状态可以在群里的置顶消息、`/status` 命令和 Herdr Space 上的状态标签这三处看到。
 
-## 准备
+## 手动安装
+
+一键安装脚本会替你做完下面这些步骤。在 Linux 上或者想自己配置时，可以照下面手动操作。
+
+### 准备
 
 1. 准备一台 macOS 电脑（Linux 理论上可用但未测，登录自启脚本只支持 macOS），装好下面这些软件。
    - [Bun](https://bun.sh)（在 1.3.14 上测试过）
@@ -32,7 +91,7 @@
    - 在群里随便发一条消息，然后打开 `https://api.telegram.org/bot<token>/getUpdates`，结果里的 `chat.id` 就是群 ID，是一个以 `-100` 开头的负数。
    - 同一个结果里的 `from.id` 就是你自己的用户 ID。
 
-## 配置
+### 配置
 
 ```sh
 cp .env.example .env
@@ -43,14 +102,15 @@ cp .env.example .env
 | `TELEGRAM_BOT_TOKEN` | 是 | BotFather 给的 token |
 | `TG_CHAT_ID` | 是 | 群 ID |
 | `TG_ALLOWED_USERS` | 是 | 允许操作的用户 ID，多个用逗号分隔。其他人发的消息一律忽略 |
-| `TG_BRIDGE_WORKDIR` | 是 | 新会话的工作目录。Claude Code 从这里读取 CLAUDE.md 和项目记忆 |
+| `TG_BRIDGE_WORKDIR` | 是 | 新会话的工作目录。Claude Code 从这里读取 CLAUDE.md 和项目记忆。要用家目录下的子目录，不要直接用家目录，因为 Claude Code 每次启动都会重新问是否信任家目录 |
 | `HERDR_WORKSPACE` | 否 | 新会话开在哪个 Herdr Space，填 ID 或名字都可以。不填就开在当前 Space |
 | `TG_AUTOSEND_EXT` | 否 | 自动回传的文件扩展名。默认不含 `md` 和 `txt`，避免把笔记和草稿发出去 |
 | `TG_CLAUDE_ARGS` | 否 | 启动新会话时附加给 `claude` 的参数 |
+| `TG_BRIDGE_LANG` | 否 | bot 消息的语言，`en`（默认）或 `zh`。一键安装会按你运行时选的语言写好 |
 
 其余配置项的说明见 `.env.example`。token 也可以不写进 `.env`，改在启动前用环境变量传入，例如用你自己的密钥管理工具注入。环境变量的优先级高于 `.env`。
 
-## 启动
+### 启动
 
 两种方式任选一种。
 
@@ -147,6 +207,8 @@ bridge 运行期间会用 `caffeinate` 阻止 Mac 闲置休眠，不需要时把
 在 macOS 上端到端验证过的有文字往返和进度气泡、图片上行、文件自动回传、`tg-send`、`/clear`、标题同步、崩溃标红和自动重启，以及守护脚本被杀后由 launchd 重新拉起。
 
 会话生命周期（关闭、重新打开、`/exit` 或关标签页之后接回、删除、发现话题被删除、`/sessions`、`/tg-bind`）已通过本机模拟入口和 Bot API 验证。
+
+安装脚本在 macOS 上用模拟的 Telegram 接口跑过配置流程，也在 UTF-8 和 C 两种语言环境、中英文两种提示下跑过 dry-run，直接运行和经 `sh` 管道运行都测了。还没有在一台全新的电脑上完整跑过，Linux 路径也还没测。消息上的 reaction 和 `/resend` 用模拟的 Telegram 接口验证过，英文版 bot 消息是离线渲染检查的。
 
 还没用真实 Telegram 操作验证的有点选择题按钮和会话管理按钮，在客户端里手动新建、关闭、重新打开、改名、删除话题，真实断网后恢复、真实重启后自启。这几项的代码都在，只通过本机模拟入口跑过。
 
