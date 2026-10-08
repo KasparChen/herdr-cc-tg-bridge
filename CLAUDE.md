@@ -1,4 +1,4 @@
-# tg-bridge — notes for agents working on this repo
+# herdr-cc-tg-bridge (command: tg-bridge) — notes for agents working on this repo
 
 Bun + TypeScript, no runtime dependencies. Read `README.md` for what it does, `docs/PRD-v1.md` for the design and `docs/PRD-v2.md` for the session lifecycle (Chinese; v1 is frozen, changes go into a new version). `spike/` is the original prototype, kept for reference only; do not edit it.
 

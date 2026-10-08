@@ -1,6 +1,8 @@
-# tg-bridge
+# herdr-cc-tg-bridge
 
 在 Telegram 群的话题里使用电脑上的 Claude Code 会话。一个话题对应一个会话，会话由终端会话管理器 [Herdr](https://herdr.dev) 管理。你在手机上操作的就是电脑上那个会话本身，记忆、配置、hook、skill 都照常生效。回到电脑前，在终端里打开 Herdr 就能接着用。
+
+这是一个用 Bun 写的小程序，没有运行时依赖，装好后的命令名叫 `tg-bridge`。本项目是个人独立项目，与 Anthropic 没有关联，也没有得到 Anthropic 的认可。它运行的是官方原版 Claude Code，用的是你自己的账号。
 
 ## 能做什么
 
@@ -153,15 +155,77 @@ bridge 运行期间会用 `caffeinate` 阻止 Mac 闲置休眠，不需要时把
 
 ## 工作方式
 
-bridge 不自己启动 Claude 进程，只通过下表中 Herdr 的命令行接口操作会话。
+```text
+                    ┌─────────────────── Telegram group (Topics) ───────────────────┐
+     your phone ──► │ General   /new  /sessions  /status  · pinned status message   │
+                    │ Topic A <-> session A   Topic B <-> session B   Topic C <-> C │
+                    └───────────────────────────────┬───────────────────────────────┘
+                                                    │ Bot API
+                                                    │ in:  long polling (messages, files, button taps)
+                                                    │ out: send / edit messages, files, topic actions
+                    ┌───────────────────────────────▼───────────────────────────────┐
+                    │ tg-bridge (one Bun process, kept alive by bin/tg-bridge)      │
+                    │   router ──► lifecycle ──► one Watcher per bound topic        │
+                    │   ~/.tg-bridge/state.json · inbox/ · local API 127.0.0.1      │
+                    └──────────┬─────────────────────────────────────▲──────────────┘
+           herdr CLI           │ prompt, status, keys,               │ tail
+           (Herdr socket)      │ open / close panes                  │
+                    ┌──────────▼─────────────────┐   writes   ┌───────┴────────────────────────┐
+                    │ Herdr                      ├──────────► │ Claude Code transcripts        │
+                    │   tab: claude  (topic A)   │            │ ~/.claude/projects/<cwd>/      │
+                    │   tab: claude  (topic B)   │            │   <session id>.jsonl           │
+                    │   your tab: claude (C)     │            └────────────────────────────────┘
+                    └──────────┬─────────────────┘
+                               └── tg-send / tg-bind, run inside a session ──► local API
+```
 
-| 动作 | 怎么做 |
+设计上守三条规矩。
+
+1. **会话归 Herdr 管。** bridge 自己不启动 Claude，只通过 Herdr 的命令行操作会话。它用 `herdr agent prompt` 送消息，用 `herdr agent get` 看状态，用 `herdr pane send-keys` 发按键，开关标签页也交给 Herdr。所以手机上和电脑上用的是同一个进程。
+2. **回复从会话记录里读。** Claude Code 会把每一轮都写进一个 jsonl 文件。bridge 增量读这个文件，工具调用、正文、标题都是结构化的数据，不受终端排版影响。只有会话停下来等输入时，才去读屏幕内容。
+3. **一个话题对应一个绑定。** `state.json` 记录每个话题对应的 Herdr 窗格、终端 ID 和 Claude 会话 ID。会话 ID 由 Herdr 的 Claude 集成（`herdr integration install claude`）上报，bridge 靠它找到会话记录文件。
+
+**一轮对话的过程**
+
+1. 你在话题 A 里发消息。router 查到这个话题的绑定；如果窗格已经不在，先用 `claude --resume <会话 ID>` 接回原会话。
+2. 附件下载到 `~/.tg-bridge/inbox/<话题>/`，路径附在文字后面，一起用 `herdr agent prompt` 送进会话。
+3. 话题 A 的 Watcher 每秒查一次 Herdr 状态，并读取会话记录的新内容。工具调用写进进度气泡，最快每 1.5 秒更新一次。
+4. 会话记录里出现「本轮结束」（带正文的 `end_turn` 回复）时，气泡标记为完成并附上上下文占用，最终回答单独发出，这一轮用 Write 工具新建的交付文件按扩展名回传。这里按会话记录判断，不按 Herdr 状态判断，因为后台子任务会让会话在回答完之后很久还显示「运行中」。
+5. 如果会话停下来等输入，单选题做成按钮，其他情况发屏幕内容。
+
+绑定期间在电脑上输入的内容，会出现在气泡里，前面带 🖥，回答同样发到话题。
+
+**各模块分工**
+
+| 文件 | 负责什么 |
 |---|---|
-| 送消息 | `herdr agent prompt` |
-| 看状态 | `herdr agent get` |
-| 发按键 | `herdr pane send-keys` |
+| `src/main.ts` | 入口和长轮询循环 |
+| `src/router.ts` | 分发收到的命令、话题系统消息、附件和按钮点击 |
+| `src/lifecycle.ts` | 开会话、接回、绑定电脑会话、关闭、删除、`/sessions`、发现被删的话题 |
+| `src/session.ts` | Watcher，每个话题一个，查状态、读会话记录、渲染这一轮 |
+| `src/transcript.ts` | 增量读取 jsonl，解析成工具、正文、标题、本轮结束等事件 |
+| `src/render.ts` | 进度气泡、Markdown 转 Telegram HTML、按 4096 字分块 |
+| `src/outbox.ts` | 判断哪些文件要回传 |
+| `src/status.ts` | 在线判定、置顶状态消息、Herdr 状态标签 |
+| `src/usage.ts` | 上下文占用和额度显示 |
+| `src/telegram.ts` | Bot API 客户端，含超时、重试、限流处理、话题探测 |
+| `src/herdr.ts` | Herdr 命令行的薄封装 |
+| `src/control.ts` | 只监听 127.0.0.1 的本机接口，`/health`、`/send`、`/bind`、`/sim` |
+| `src/store.ts` | `state.json`，存更新偏移量和话题绑定 |
+| `bin/tg-bridge` | 守护脚本，崩溃重启、标红、持有防休眠断言 |
+| `bin/tg-send`、`bin/tg-bind` | 在会话里运行，回传文件、绑定或断开当前会话 |
+| `bin/install-launchd` | 安装 macOS 登录自启 |
 
-回复内容从 Claude Code 的会话记录文件（`~/.claude/projects/` 下的 jsonl）增量读取。设计细节和取舍见 [PRD-v1.md](PRD-v1.md)，会话生命周期见 [PRD-v2.md](PRD-v2.md)。
+**状态存在哪里**
+
+| 内容 | 位置 | 归谁管 |
+|---|---|---|
+| 话题绑定、更新偏移量、是否已提示 | `~/.tg-bridge/state.json` | bridge |
+| 你发过来的文件 | `~/.tg-bridge/inbox/<话题>/` | bridge |
+| 会话进程和状态 | Herdr | Herdr |
+| 对话内容 | `~/.claude/projects/*/<会话 ID>.jsonl` | Claude Code |
+
+设计细节和取舍见 [PRD-v1.md](PRD-v1.md)，会话生命周期见 [PRD-v2.md](PRD-v2.md)。
 
 ## 开发
 
