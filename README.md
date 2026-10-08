@@ -182,6 +182,7 @@ Only sessions started after the Herdr integration is installed can be bridged.
 | Anywhere | `/new name` | New topic + new session. Without a name, the topic is renamed after the session's title |
 | Anywhere | `/sessions` | All sessions with state, context use and last activity, plus plan limits; one row of buttons each (close / resume / reopen, delete) |
 | Anywhere | `/status`, `/help` | Bridge status and plan limits, help |
+| In a topic | `/resend` | Send again the parts of the last answer that may not have arrived (😱) |
 | Desktop session | `/tg-bind`, `/tg-bind off` | Hand this session over to a new topic, or disconnect it |
 | In a topic | Text, photos, files | Delivered to that topic's session |
 | In a topic | `/clear` and other slash commands | Passed through to Claude. After `/clear` you are in a fresh context |
@@ -208,11 +209,15 @@ bin/tg-send --text "done"
 
 | Where | Normally | When stopped or crashed |
 |---|---|---|
-| Pinned message in the group | Refreshed every 30 s with state, session count, plan limits, last update time | Turns 🔴 immediately, with the reason |
+| Pinned message in the group | Edited in place every 30 s with state, session count, plan limits, last update time; a 🔄 button refreshes it by hand | Turns 🔴 immediately, with the reason |
 | `/status` | Same content | No reply |
 | Herdr workspace token `tg` | `🟢 <sessions>` | Disappears after 90 s |
 
 While it runs, the bridge keeps the Mac from idle-sleeping. Closing the lid still puts the Mac to sleep. When the computer sleeps nothing can be sent, so the pinned message simply stops updating. If "last update" is more than two minutes old, the bridge or the computer is offline.
+
+Each message you send in a topic carries a reaction showing where it is: 👀 received by the bridge, ✍ taken up by the session (it stays 👀 while queued), 🤔 waiting for your choice, no reaction once the whole answer has arrived. 💔 means it did not reach the session or Telegram refused part of the answer; 😱 means part of the answer got no reply from Telegram and may be missing, and `/resend` in the topic sends those parts again. A message with no reaction at all never reached the bridge. Requests that post something (messages, photos, files, new topics) are never retried after a network failure, because the reply may be what got lost and the bot cannot read the chat to check, so a retry could post the answer twice.
+
+The status is always one message edited in place; a new one is sent only if that message was deleted. A failed edit never sends a replacement, and beats never overlap, so a long network outage or a wake from sleep cannot flood General. While the bridge is abnormal, it stops refreshing after three beats in a row with nothing changed (`TG_STATUS_PAUSE_AFTER`), says so in the message, and resumes on its own when anything changes. The button refreshes it at any time.
 
 ## Status of testing
 

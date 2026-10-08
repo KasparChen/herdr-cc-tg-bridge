@@ -8,7 +8,7 @@ import type { Lifecycle } from "./lifecycle";
 import type { Watcher } from "./session";
 import type { Status } from "./status";
 import type { Store } from "./store";
-import { MAX_DOWNLOAD, type Telegram } from "./telegram";
+import { MAX_DOWNLOAD, REACT, type Telegram } from "./telegram";
 import { limitsLine } from "./usage";
 
 const HELP = [
@@ -20,6 +20,7 @@ const HELP = [
   "• <code>/close</code> 结束会话并关闭话题，重新打开话题会接着原会话。在客户端里关话题效果一样",
   "• <code>/delete</code> 结束会话并删除话题（要确认）。从电脑接过来的会话，关闭和删除都只断开 Telegram",
   "• <code>/stop</code> 打断当前回复，<code>/screen</code> 看会话屏幕，<code>/keys down enter</code> 发按键",
+  "• 你发的消息上会标进度：👀 收到，✍ 会话在处理，🤔 等你选择，标记消失就是回答已发完；💔 没送进会话或发送失败，😱 回答可能没发出去，发 <code>/resend</code> 补发",
   "• <code>/sessions</code> 看全部会话，<code>/status</code> 看 bridge 状态和额度",
 ].join("\n");
 
@@ -27,7 +28,7 @@ const HELP = [
 export const COMMANDS = [
   ["new", "新建话题和会话"], ["sessions", "列出全部会话"], ["close", "结束本话题的会话并关闭话题"],
   ["delete", "结束会话并删除本话题"], ["stop", "打断当前回复"], ["screen", "看会话屏幕"], ["keys", "往会话发按键"],
-  ["status", "看 bridge 状态和额度"], ["help", "用法"],
+  ["resend", "补发上一轮没确认发出的回答"], ["status", "看 bridge 状态和额度"], ["help", "用法"],
 ].map(([command, description]) => ({ command, description }));
 
 const MEDIA = ["photo", "document", "video", "audio", "voice", "animation", "video_note"];
@@ -66,7 +67,7 @@ export class Router {
     const cmd = first.startsWith("/") ? first.replace(/@\w+$/, "").toLowerCase() : "";
 
     if (cmd === "/help" || cmd === "/start") { await this.tg.send(thread, HELP); return; }
-    if (cmd === "/status") { await this.tg.send(thread, this.status.text()); return; }
+    if (cmd === "/status") { await this.tg.send(thread, this.status.text(undefined, this.status.paused)); return; }
     if (cmd === "/new") {
       const name = rest.join(" ");
       const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, name: cut(name || `新会话 ${new Date().toLocaleTimeString("zh-CN", { hour12: false })}`, 120) });
@@ -98,6 +99,12 @@ export class Router {
     const cur = this.store.state.topics[thread];
     const st = cur && !cur.closedAt ? await H.paneState(cur.pane, cur.terminal) : undefined;
     const live = st?.state === "live";
+    if (cmd === "/resend") {
+      const w = this.watchers.get(thread);
+      if (w) await w.resend();
+      else await this.tg.notice(thread, "这个话题现在没有会话，也就没有可以重发的回答");
+      return;
+    }
     if (cmd === "/keys" || cmd === "/stop" || cmd === "/screen") {
       if (!live) { await this.tg.notice(thread, "这个话题现在没有运行中的会话"); return; }
       if (cmd === "/keys") await H.sendKeys(cur!.pane, rest);
@@ -109,17 +116,26 @@ export class Router {
       return;
     }
 
+    // Progress shows as a reaction on this message; slash commands for the session (/clear …) leave no transcript
+    // entry to follow, so they only get one when delivery fails.
+    const tracked = !cmd && !!m.message_id;
+    if (tracked) this.tg.react(m.message_id, REACT.got);
     // no live session behind this topic: resume the bound one (or open a first one) before delivering
-    if (!live && !(await this.life.open(thread, { name: `tg-${thread}` }))) return;
+    if (!live && !(await this.life.open(thread, { name: `tg-${thread}` }))) { m.message_id && this.tg.react(m.message_id, REACT.failed); return; }
     const b = this.store.state.topics[thread];
     const files = await this.saveAttachments(m, thread);
-    if (!text && !files.length) return;
+    if (!text && !files.length) { m.message_id && this.tg.react(m.message_id, REACT.failed); return; }
     const body = [text || (files.length ? "（见附件）" : ""), ...files.map(f => `[附件] ${f}`)].join("\n");
-    this.watchers.get(thread)?.noteFromTg(body);
+    const w = this.watchers.get(thread);
+    w?.noteFromTg(body, tracked ? m.message_id : undefined);
     b.lastActive = Date.now();
     this.store.save();
     const r = await H.prompt(b.pane, body);
-    if (!r?.result) await this.tg.notice(thread, `⚠️ 送达失败，Herdr 返回 <code>${esc(cut(JSON.stringify(r?.error ?? r), 300))}</code>`);
+    if (!r?.result) {
+      if (m.message_id) w?.dropFromTg(m.message_id);
+      m.message_id && this.tg.react(m.message_id, REACT.failed);
+      await this.tg.notice(thread, `⚠️ 送达失败，Herdr 返回 <code>${esc(cut(JSON.stringify(r?.error ?? r), 300))}</code>`);
+    }
   }
 
   private async saveAttachments(m: any, thread: number): Promise<string[]> {
@@ -147,6 +163,7 @@ export class Router {
     const [kind, a, b, c] = String(q.data).split(":");
     const msg = q.message?.message_id;
     if (kind === "lc") return this.onLifecycle(a, Number(b), c === "l", msg);
+    if (kind === "st") return this.status.beat(true);
     const thread = a, oi = c;
     const bind = this.store.state.topics[thread];
     if (kind !== "aq" || !bind) return;

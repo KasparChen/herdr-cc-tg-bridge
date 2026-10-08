@@ -15,6 +15,7 @@ export type Config = {
   claudeArgs: string[];
   statusIntervalSec: number;
   onlineWindowSec: number;
+  statusPauseAfter: number; // abnormal and unchanged this many beats in a row -> stop editing the pinned status
   usageFile?: string;     // JSON with five_hour / seven_day used_percentage + resets_at (Claude Code status line data)
   fableUsageFile?: string; // JSON with percent + resets_at for a per-model weekly limit
 };
@@ -47,6 +48,7 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     claudeArgs: (env.TG_CLAUDE_ARGS ?? "").split(/\s+/).filter(Boolean),
     statusIntervalSec: Number(env.TG_STATUS_INTERVAL ?? 30),
     onlineWindowSec: Number(env.TG_ONLINE_WINDOW ?? 90),
+    statusPauseAfter: Number(env.TG_STATUS_PAUSE_AFTER ?? 3),
     usageFile: env.TG_USAGE_FILE?.trim() ? expand(env.TG_USAGE_FILE.trim()) : undefined,
     fableUsageFile: env.TG_FABLE_USAGE_FILE?.trim() ? expand(env.TG_FABLE_USAGE_FILE.trim()) : undefined,
   };

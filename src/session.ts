@@ -9,14 +9,18 @@ import { log } from "./log";
 import { pickOutbox } from "./outbox";
 import { bubble, commentLine, cut, esc, mdChunks, toolLine } from "./render";
 import type { Binding, Store } from "./store";
-import type { Telegram } from "./telegram";
+import { REACT, type SendState, type Telegram } from "./telegram";
 import { TranscriptTail, transcriptPath, type TEvent } from "./transcript";
 import { parseCtx, type Ctx } from "./usage";
 
 type Turn = {
   bubble?: number; lines: string[]; texts: string[]; calls: number; t0: number;
   lastEdit: number; dirty: boolean; sawWorking: boolean; written: string[]; ended?: boolean;
+  msgs: number[]; // Telegram messages this turn answers: they get its outcome as a reaction
 };
+// What the last answer was made of and whether each part is known to have arrived, for /resend.
+type Answer = { msgs: number[]; items: { html?: string; file?: string; state: SendState }[] };
+const NO_BUBBLE = -1; // the bubble send had no reply: sending another could show it twice
 
 const CTX_WARN = 80;
 
@@ -31,7 +35,8 @@ export class Watcher {
   status = "unknown";
   turn?: Turn;
   tail?: TranscriptTail;
-  fromTg: string[] = [];
+  fromTg: { text: string; msg?: number; at: number }[] = []; // sent from Telegram, not yet seen in the transcript
+  lastAnswer?: Answer;
   lastAsk?: { id: string; input: any };
   askedIds = new Set<string>();
   missing = 0;
@@ -55,11 +60,19 @@ export class Watcher {
 
   stop() { clearInterval(this.timer); }
 
-  noteFromTg(text: string) { this.fromTg.push(text.trim()); if (this.fromTg.length > 20) this.fromTg.shift(); }
+  noteFromTg(text: string, msg?: number) {
+    this.fromTg.push({ text: text.trim(), msg, at: Date.now() });
+    if (this.fromTg.length > 20) this.fromTg.shift();
+  }
+
+  // a prompt Herdr refused never shows up in the transcript
+  dropFromTg(msg: number) { this.fromTg = this.fromTg.filter(f => f.msg !== msg); }
 
   private newTurn(): Turn {
-    return { lines: [], texts: [], calls: 0, t0: Date.now(), lastEdit: 0, dirty: true, sawWorking: false, written: [] };
+    return { lines: [], texts: [], calls: 0, t0: Date.now(), lastEdit: 0, dirty: true, sawWorking: false, written: [], msgs: [] };
   }
+
+  private mark(emoji: string) { for (const m of this.turn?.msgs ?? []) this.tg.react(m, emoji); }
 
   async tick() {
     // a pane that has been gone for 10s is only re-checked every 15s
@@ -88,6 +101,7 @@ export class Watcher {
     const prev = this.status;
     this.status = a.agent_status;
     if (this.status === "working" && !this.afterEnd) { this.turn ??= this.newTurn(); this.turn.sawWorking = true; }
+    if (prev === "blocked" && this.status === "working") this.mark(REACT.working);
     for (const ev of this.tail?.read() ?? []) await this.onEvent(ev);
     // background agents keep Herdr at "working" after the reply is done; the transcript says when the turn ended
     if (this.turn?.ended) { await this.finish(); this.afterEnd = this.status === "working"; return; }
@@ -121,9 +135,11 @@ export class Watcher {
     if (ev.kind === "user" || ev.kind === "queued") {
       if (ev.text.startsWith("<")) return; // command / system wrappers
       this.turn ??= this.newTurn();
-      const i = this.fromTg.indexOf(ev.text.trim());
-      if (i >= 0) this.fromTg.splice(i, 1);
-      else { this.turn.lines.push(`🖥 ${cut(ev.text.replace(/\s+/g, " "), 200)}`); this.turn.dirty = true; } // typed on the desktop
+      const i = this.fromTg.findIndex(f => f.text === ev.text.trim());
+      if (i >= 0) {
+        const [f] = this.fromTg.splice(i, 1);
+        if (f.msg) { this.turn.msgs.push(f.msg); this.tg.react(f.msg, this.status === "blocked" ? REACT.ask : REACT.working); }
+      } else { this.turn.lines.push(`🖥 ${cut(ev.text.replace(/\s+/g, " "), 200)}`); this.turn.dirty = true; } // typed on the desktop
       return;
     }
     this.turn ??= this.newTurn();
@@ -144,8 +160,10 @@ export class Watcher {
     t.dirty = false;
     t.lastEdit = Date.now();
     const html = bubble(t.lines, t.calls, Math.floor((Date.now() - t.t0) / 1000), done, 3600, done && this.ctx ? `ctx ${this.ctx.text}` : "");
+    if (t.bubble === NO_BUBBLE) return;
     if (t.bubble && (await this.tg.edit(t.bubble, html))) return;
-    t.bubble = await this.tg.send(this.thread, html);
+    const r = await this.tg.sendState(this.thread, html);
+    t.bubble = r.id ?? (r.state === "unknown" ? NO_BUBBLE : undefined);
   }
 
   private async finish() {
@@ -157,14 +175,43 @@ export class Watcher {
     this.store.save();
     const final = t.texts.join("\n\n").trim();
     const chunks = mdChunks(final);
-    for (const c of chunks) await this.tg.send(this.thread, c);
     const files = pickOutbox(t.written, this.cfg);
-    for (const f of files) {
-      const ok = await this.tg.sendFile(this.thread, f, `📎 <code>${esc(f.replace(homedir(), "~"))}</code>`);
-      log("outbox", this.thread, ok ? "sent" : "FAILED", f);
-    }
-    log("turn done", this.thread, { calls: t.calls, chunks: chunks.length, files: files.length, ctx: this.ctx?.text });
+    // Telegram messages that never matched a transcript entry would stay marked forever: once the session is
+    // idle, settle the ones sent before this turn began along with it
+    const settled = this.status === "idle" || this.status === "done";
+    const stray = settled ? this.fromTg.filter(f => f.msg && f.at < t.t0) : [];
+    this.fromTg = this.fromTg.filter(f => !stray.includes(f));
+    const answer: Answer = { msgs: [...t.msgs, ...stray.map(f => f.msg!)], items: [...chunks.map(html => ({ html, state: "failed" as SendState })), ...files.map(file => ({ file, state: "failed" as SendState }))] };
+    await this.deliver(answer);
+    log("turn done", this.thread, { calls: t.calls, chunks: chunks.length, files: files.length, ctx: this.ctx?.text, unsent: answer.items.filter(i => i.state !== "ok").length });
     await this.ctxCheck();
+  }
+
+  // Send the parts not yet known to have arrived, then show the outcome on the user's messages:
+  // no reaction = all arrived, 💔 = Telegram refused something, 😱 = something may not have arrived (/resend).
+  private async deliver(a: Answer, only?: Set<object>) {
+    for (const it of a.items) {
+      if (only && !only.has(it)) continue;
+      if (it.html) it.state = (await this.tg.sendState(this.thread, it.html)).state;
+      else {
+        it.state = await this.tg.sendFileState(this.thread, it.file!, `📎 <code>${esc(it.file!.replace(homedir(), "~"))}</code>`);
+        log("outbox", this.thread, it.state, it.file);
+      }
+    }
+    this.lastAnswer = a;
+    const states = a.items.map(i => i.state);
+    const emoji = states.includes("failed") ? REACT.failed : states.includes("unknown") ? REACT.unsure : undefined;
+    for (const m of a.msgs) this.tg.react(m, emoji);
+  }
+
+  // /resend: the parts of the last answer that did not surely arrive
+  async resend() {
+    const a = this.lastAnswer;
+    if (!a) { await this.tg.send(this.thread, "没有可以重发的回答。上一轮回答只存在内存里，bridge 重启后就没有了，可以在 Herdr 标签页里看"); return; }
+    const todo = a.items.filter(i => i.state !== "ok");
+    if (!todo.length) { await this.tg.send(this.thread, "上一轮回答已经全部发出"); return; }
+    await this.deliver(a, new Set(todo));
+    log("resend", this.thread, todo.map(i => i.state));
   }
 
   // once per fill-up: a nearly full context makes replies slower and compaction lossy, so suggest a fresh session
@@ -183,6 +230,7 @@ export class Watcher {
 
   private async onBlocked() {
     for (const ev of this.tail?.read() ?? []) await this.onEvent(ev);
+    this.mark(REACT.ask);
     const ask = this.lastAsk;
     if (ask && !this.askedIds.has(ask.id)) {
       this.askedIds.add(ask.id);
