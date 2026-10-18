@@ -8,10 +8,14 @@ import type { Router } from "./router";
 import type { Status } from "./status";
 import type { Store } from "./store";
 import type { Telegram } from "./telegram";
+import { findTranscript } from "./transcript";
 
 export function startControl(cfg: Config, tg: Telegram, store: Store, status: Status, router: Router, life: Lifecycle) {
-  // a Codex caller's own session id wins over its pane, which can be wrong under Codex's shared app-server
-  const topicOf = (body: any) => typeof body.session === "string" ? store.topicOfSession(body.session) : store.topicOfPane(String(body.pane ?? ""));
+  // a Codex caller's own session id wins over its pane, which can be wrong under Codex's shared app-server.
+  // Only an id with a Codex rollout counts: a CODEX_THREAD_ID inherited by a Claude pane (Herdr started from a Codex
+  // terminal) must not turn its tg-send / tg-bind into lookups of a session that is not there.
+  const codexSession = (body: any) => typeof body.session === "string" && findTranscript("", body.session, "codex") ? body.session as string : undefined;
+  const topicOf = (body: any) => { const s = codexSession(body); return s ? store.topicOfSession(s) : store.topicOfPane(String(body.pane ?? "")); };
   return Bun.serve({
     hostname: "127.0.0.1",
     port: cfg.port,
@@ -43,7 +47,7 @@ export function startControl(cfg: Config, tg: Telegram, store: Store, status: St
           await life.close(thread, false);
           return Response.json({ ok: true, thread, closed: true });
         }
-        const r = await life.attach(String(body.pane), typeof body.session === "string" ? body.session : undefined);
+        const r = await life.attach(String(body.pane), codexSession(body));
         return Response.json(r, { status: r.ok ? 200 : 409 });
       }
       if (url.pathname === "/sim" && cfg.sim && body.callback) {

@@ -165,13 +165,16 @@ describe("mixed provider lifecycle (offline)", () => {
     store.state.topics[41] = { pane: "pane", cwd: dir, kind: "codex", session: "test-session" };
     expect(await life.attach("pane", "test-session")).toEqual({ ok: true, thread: 41, already: true });
     expect((await life.attach("pane", "other-session")).ok).toBe(false); // Herdr credited a neighbour's session to this pane
+    rollout("other-session", dir);
     const srv = startControl({ ...cfg, port: 0 }, { ...tg, send: async (thread: number) => { sends.push(String(thread)); return 1; } }, store, {} as any, {} as any, life);
     const post = (body: any) => fetch(`http://127.0.0.1:${srv.port}/send`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
     try {
       expect((await post({ pane: "pane", session: "other-session", text: "x" })).status).toBe(404);
       expect((await post({ pane: "elsewhere", session: "test-session", text: "x" })).status).toBe(200);
       expect((await post({ pane: "pane", text: "x" })).status).toBe(200); // Claude: by pane, as before
-      expect(sends).toEqual(["41", "41"]);
+      // a CODEX_THREAD_ID inherited by a Claude pane names no Codex session: by pane, as before
+      expect((await post({ pane: "pane", session: "inherited-not-codex", text: "x" })).status).toBe(200);
+      expect(sends).toEqual(["41", "41", "41"]);
     } finally { srv.stop(true); }
   });
   test("a new session id from Herdr is followed only if it started in this pane's folder and no other topic has it", async () => {
