@@ -4,7 +4,7 @@ import type { AgentKind } from "./providers";
 import { shq } from "./backends";
 
 export async function herdr(...args: string[]): Promise<any> {
-  const p = Bun.spawn(["herdr", ...args], { stdout: "pipe", stderr: "pipe" });
+  const p = Bun.spawn(["herdr", ...args], { env: process.env, stdout: "pipe", stderr: "pipe" }); // env: PATH as it is now, not at start
   const [out, err] = await Promise.all([new Response(p.stdout).text(), new Response(p.stderr).text(), p.exited]);
   if (err.trim() && args[0] !== "pane" && !(args[0] === "agent" && args[1] === "get")) log("herdr", args.slice(0, 2).join(" "), err.trim().slice(0, 200));
   try { return JSON.parse(out); } catch {}
@@ -91,6 +91,9 @@ export async function spawnAgent(opts: { kind: AgentKind; cmd?: string; workspac
     if (i) await Bun.sleep(500);
     const st = await herdr("agent", "start", opts.agent, "--kind", opts.kind, "--pane", pane, ...(opts.args.length ? ["--", ...opts.args] : []));
     a = st?.result?.agent;
+    // Herdr 0.9 reports an agent held at a startup screen (update notice, hook trust) as not ready; it is running,
+    // and the Watcher shows that screen in the topic so it can be answered with /keys
+    if (st?.error?.code === "agent_not_ready") { a = await agentGet(pane); break; }
     if (st?.error?.code && st.error.code !== "agent_pane_busy") break; // only "busy" is worth waiting for
   }
   if (!a) {
