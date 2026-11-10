@@ -2,7 +2,7 @@
 
 在 Telegram 群的话题里使用电脑上的 Claude Code 会话。一个话题对应一个会话，会话由终端会话管理器 [Herdr](https://herdr.dev) 管理。你在手机上操作的就是电脑上那个会话本身，记忆、配置、hook、skill 都照常生效。回到电脑前，在终端里打开 Herdr 就能接着用。
 
-**也支持 Codex：** `/new codex 名字` 开 Codex 会话，`/new claude 名字` 开 Claude 会话；原有的 Claude 话题不受影响。在 Herdr 里运行中的 Codex 会话里输入 `$tg-bind` 就能接到 Telegram（安装脚本会问要不要启用）。说明见 [Codex 接入与范围](PRD-v3-codex.md)。
+**一个群里用多种后端：** `/new codex 名字` 开 Codex 会话，`/new claude 名字` 开 Claude 会话，`/new 自定义名 名字` 用你配置的命令开会话（比如让 Claude Code 走另一个 API 网关的包装命令）。`/config` 设置不写后端时 `/new` 用哪个；`/switch 后端` 让本话题的会话换到同类的另一个后端接着聊。原有的 Claude 话题不受影响。在 Herdr 里运行中的 Codex 会话里输入 `$tg-bind` 就能接到 Telegram（安装脚本会问要不要启用）。说明见 [Codex 接入与范围](PRD-v3-codex.md)。
 
 这是一个用 Bun 写的小程序，没有运行时依赖，装好后的命令名叫 `tg-bridge`。本项目是个人独立项目，与 Anthropic 没有关联，也没有得到 Anthropic 的认可。它运行的是官方原版 Claude Code，用的是你自己的账号。
 
@@ -108,6 +108,8 @@ cp .env.example .env
 | `HERDR_WORKSPACE` | 否 | 新会话开在哪个 Herdr Space，填 ID 或名字都可以。不填就开在当前 Space |
 | `TG_AUTOSEND_EXT` | 否 | 自动回传的文件扩展名。默认不含 `md` 和 `txt`，避免把笔记和草稿发出去 |
 | `TG_CLAUDE_ARGS` | 否 | 启动新会话时附加给 `claude` 的参数 |
+| `TG_BACKENDS` | 否 | 自定义后端名，逗号分隔，例如 `gw`。每个都要配 `TG_BACKEND_<名>_CMD`（启动它的 shell 命令）；可选 `_KIND`（`claude`，默认，或 `codex`）和 `_BASE_URL`（电脑会话的 `ANTHROPIC_BASE_URL` 等于它时，`/tg-bind` 认成这个后端） |
+| `TG_DEFAULT_BACKEND` | 否 | `/new 名字` 和客户端里新建的话题用哪个后端，`/config` 改过之后以 `/config` 为准：`claude`（默认）、`codex` 或自定义的 |
 | `TG_BRIDGE_LANG` | 否 | bot 消息的语言，`en`（默认）或 `zh`。一键安装会按你运行时选的语言写好 |
 
 其余配置项的说明见 `.env.example`。token 也可以不写进 `.env`，改在启动前用环境变量传入，例如用你自己的密钥管理工具注入。环境变量的优先级高于 `.env`。
@@ -159,6 +161,9 @@ Herdr 服务要等你打开 Herdr 才会运行。在那之前 bridge 能收到�
 | 在哪里 | 发什么 | 效果 |
 |---|---|---|
 | 任意位置 | `/new 名字` | 新建话题和会话。不写名字时，等会话起好标题后自动改名 |
+| 任意位置 | `/new 后端 名字` | 同上，指定后端（`claude`、`codex` 或 `TG_BACKENDS` 里的）。话题图标颜色区分后端 |
+| 任意位置 | `/config` | 列出全部后端，点按钮设为 `/new` 的默认后端。也可以发 `/config default codex` |
+| 话题里 | `/switch 后端` | 结束当前会话，用同类的另一个后端接着同一个会话（比如 `claude` 和自定义的 Claude 命令之间）。不写后端时给按钮。Claude 和 Codex 之间不能互接 |
 | 任意位置 | `/sessions` | 列出全部会话、状态、上下文占用、最后活动时间和额度，每个会话一排按钮（关闭或接回或重开，以及删除） |
 | 电脑上的会话里 | `/tg-bind`，断开用 `/tg-bind off` | 把这个会话接到一个新话题，先发接手卡片和上一轮回答，之后两边同步 |
 | 任意位置 | `/status`、`/help` | 看 bridge 状态、看用法 |

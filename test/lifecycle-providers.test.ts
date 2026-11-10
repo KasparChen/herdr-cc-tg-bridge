@@ -6,9 +6,10 @@ import { Store } from "../src/store";
 import { loadConfig } from "../src/config";
 
 let state: any, started: any[], closed: string[], label: string | undefined;
-let renamedTabs: string[] = [], keyboards: any[] = [], agents: any[] = [], failSpawn = false;
+let renamedTabs: string[] = [], keyboards: any[] = [], agents: any[] = [], failSpawn = false, prompts: string[] = [];
 mock.module("../src/herdr", () => ({
-  paneState: async () => state,
+  paneState: async () => (typeof state === "function" ? state() : state),
+  prompt: async (_: string, text: string) => { prompts.push(text); return { result: {} }; },
   spawnAgent: async (opts: any) => { started.push(opts); return failSpawn ? undefined : { pane: "new-pane", tab: "new-tab", terminal: "new-terminal", session: "test-session" }; },
   resolveWorkspace: async () => "workspace",
   workspaces: async () => [{ workspace_id: "workspace", label: "Telegram" }],
@@ -17,6 +18,7 @@ mock.module("../src/herdr", () => ({
   tabLabel: async () => label,
   paneRead: async () => "Question 1/2",
   agentList: async () => agents,
+  usefulLabel: (l?: string) => (l && !/^\d+$/.test(l.trim()) ? l : undefined),
 }));
 const { Lifecycle } = await import("../src/lifecycle");
 const { Watcher } = await import("../src/session");
@@ -38,7 +40,7 @@ case "$*" in *tg-bridge-marker*) echo '[{"type":"message","role":"developer","co
   cfg = loadConfig({ TELEGRAM_BOT_TOKEN: "fake", TG_CHAT_ID: "-1", TG_ALLOWED_USERS: "1", TG_BRIDGE_WORKDIR: dir, TG_BRIDGE_STATE_DIR: join(dir, "state") });
   store = new Store(cfg.stateDir); watchers = new Map(); notices = []; sends = []; calls = []; started = []; closed = [];
   state = { state: "gone" };
-  label = undefined; renamedTabs = []; keyboards = []; agents = []; failSpawn = false;
+  label = undefined; renamedTabs = []; keyboards = []; agents = []; failSpawn = false; prompts = [];
   tg = {
     chatId: -1,
     call: async (name: string, body: any) => { calls.push({ name, body }); return { ok: true, result: { message_thread_id: 41 } }; },
@@ -67,7 +69,7 @@ const live = () => ({ state: "live", terminal: "terminal", agent: { agent: "code
 
 describe("mixed provider lifecycle (offline)", () => {
   test("new Codex topic persists provider, restart retains it, missing pane resumes Codex", async () => {
-    expect(await life.open(41, { fresh: true, kind: "codex", name: "测试" })).toBe(true);
+    expect(await life.open(41, { fresh: true, backend: "codex", name: "测试" })).toBe(true);
     expect(started[0].kind).toBe("codex"); expect(started[0].args[0]).toBe("-c");
     expect(started[0].args[1]).toContain("tg-send"); expect(started[0].args[1]).not.toContain("Write tool");
     const reloaded = new Store(cfg.stateDir); expect(reloaded.state.topics[41].kind).toBe("codex");
@@ -343,5 +345,102 @@ describe("mixed provider lifecycle (offline)", () => {
     appendFileSync(path, ask([q("语言？"), q("输出？")]));
     state.agent.agent_status = "blocked"; await w.tick();
     expect(keyboards).toHaveLength(1); expect(sends.at(-1)).toContain("/keys");
+  });
+});
+
+describe("backends: /new, /config, /switch, tg-bind (offline)", () => {
+  let oldUserHome: string | undefined, router: any;
+  const claudeLive = (status = "idle") => ({ state: "live", terminal: "terminal", agent: { agent: "claude", agent_status: status, agent_session: { value: "claude-session" }, cwd: dir, workspace_id: "workspace", tab_id: "tab", terminal_id: "terminal" } });
+  // a Claude transcript under a throwaway HOME, so the session counts as resumable
+  const claudeTranscript = () => { const d = join(dir, ".claude/projects", dir.replace(/[^a-zA-Z0-9]/g, "-")); mkdirSync(d, { recursive: true }); writeFileSync(join(d, "claude-session.jsonl"), ""); };
+  const msg = (text: string, thread?: number) => router.onMessage({ chat: { id: -1 }, from: { id: 1 }, text, is_topic_message: !!thread, message_thread_id: thread });
+  beforeEach(async () => {
+    oldUserHome = process.env.CLAUDE_CONFIG_DIR; process.env.CLAUDE_CONFIG_DIR = join(dir, ".claude");
+    cfg = loadConfig({ TELEGRAM_BOT_TOKEN: "fake", TG_CHAT_ID: "-1", TG_ALLOWED_USERS: "1", TG_BRIDGE_WORKDIR: dir, TG_BRIDGE_STATE_DIR: join(dir, "state"),
+      TG_BACKENDS: "gw", TG_BACKEND_GW_CMD: "claude-gw", TG_BACKEND_GW_BASE_URL: "https://gw.example", TG_DEFAULT_BACKEND: "gw" });
+    life = new Lifecycle(cfg, tg, store, watchers, "/bridge/tg-send");
+    const { Router } = await import("../src/router");
+    router = new Router(cfg, tg, store, watchers, {} as any, life);
+  });
+  afterEach(() => { if (oldUserHome === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = oldUserHome; });
+
+  test("/new uses the default backend: the custom command, its colour and its name in the notice", async () => {
+    await msg("/new 周报");
+    expect(started[0]).toMatchObject({ kind: "claude", cmd: "claude-gw" });
+    expect(started[0].args).toContain("--append-system-prompt");
+    expect(calls[0].body.icon_color).toBe(13338331);
+    expect(store.state.topics[41]).toMatchObject({ backend: "gw", kind: "claude" });
+    expect(notices.at(-1)).toContain("gw");
+  });
+  test("/new claude and /new codex pick built-ins, started by Herdr itself", async () => {
+    await msg("/new claude 周报"); await msg("/new codex 周报");
+    expect(started.map(s => [s.kind, s.cmd])).toEqual([["claude", undefined], ["codex", undefined]]);
+    expect(calls.filter(c => c.name === "createForumTopic").map(c => c.body.icon_color)).toEqual([16766590, 9367192]);
+  });
+  test("a topic resumes on its own backend whatever the default is now", async () => {
+    claudeTranscript();
+    store.state.topics[41] = { pane: "old", cwd: dir, kind: "claude", backend: "gw", session: "claude-session" };
+    life.setDefaultBackend("codex");
+    await life.open(41);
+    expect(started[0]).toMatchObject({ kind: "claude", cmd: "claude-gw" });
+    expect(started[0].args.slice(0, 2)).toEqual(["--resume", "claude-session"]);
+    store.state.topics[42] = { pane: "old", cwd: dir }; // before v4: plain Claude
+    await life.open(42);
+    expect(started[1].cmd).toBeUndefined();
+  });
+  test("/config: buttons set the default, it survives a restart, and a backend removed from .env falls back", async () => {
+    await msg("/config");
+    expect(sends.at(-1)).toContain("gw"); expect(keyboards.at(-1)[0].map((b: any) => b.callback_data)).toEqual(["cf:default:claude", "cf:default:codex", "cf:default:gw"]);
+    const edits: string[] = []; tg.edit = async (_: number, html: string) => { edits.push(html); return true; };
+    await router.onCallback({ id: "sim", from: { id: 1 }, data: "cf:default:codex", message: { message_id: 9 } });
+    expect(edits.at(-1)).toContain("codex");
+    expect(new Store(cfg.stateDir).state.defaultBackend).toBe("codex");
+    await msg("/new x"); expect(started.at(-1).kind).toBe("codex");
+    await msg("/config default nope"); expect(notices.at(-1)).toContain("nope");
+    await msg("/config default GW"); expect(store.state.defaultBackend).toBe("gw");
+    store.state.defaultBackend = "gone";
+    expect(life.defaultBackend()).toBe("gw");
+  });
+  test("tg-bind tells an gw desktop session from plain Claude by ANTHROPIC_BASE_URL", async () => {
+    state = claudeLive();
+    expect((await life.attach("pane", undefined, "https://gw.example/")).ok).toBe(true);
+    expect(store.state.topics[41].backend).toBe("gw"); expect(calls[0].body.icon_color).toBe(13338331);
+    state = { ...claudeLive(), terminal: "t2", agent: { ...claudeLive().agent, terminal_id: "t2", agent_session: { value: "other" } } };
+    tg.call = async (name: string, body: any) => { calls.push({ name, body }); return { ok: true, result: { message_thread_id: 42 } }; };
+    expect((await life.attach("pane")).ok).toBe(true);
+    expect(store.state.topics[42].backend).toBe("claude");
+  });
+  test("/switch refuses what it cannot do", async () => {
+    store.state.topics[41] = { pane: "pane", terminal: "terminal", cwd: dir, kind: "claude", backend: "gw", session: "claude-session" };
+    await msg("/switch gw", 41); expect(notices.at(-1)).toContain("gw");
+    await msg("/switch codex", 41); expect(notices.at(-1)).toContain("/new codex");
+    claudeTranscript(); state = claudeLive("working");
+    await msg("/switch claude", 41); expect(notices.at(-1)).toContain("/stop");
+    expect(prompts).toEqual([]); expect(started).toEqual([]); expect(store.state.topics[41].backend).toBe("gw");
+    await msg("/switch", 41); expect(keyboards.at(-1)).toEqual([[{ text: "claude", callback_data: "sw:claude:41" }]]);
+  });
+  test("/switch on an idle session: /exit, then the same session on the new backend in the same pane", async () => {
+    claudeTranscript();
+    store.state.topics[41] = { pane: "pane", terminal: "terminal", cwd: dir, kind: "claude", backend: "gw", session: "claude-session", attached: true };
+    let exited = false;
+    state = () => (exited ? { state: "exited", terminal: "terminal" } : claudeLive());
+    tg.notice = async (_: any, text: string) => { notices.push(text); };
+    const p = msg("/switch claude", 41);
+    await Bun.sleep(50); expect(prompts).toEqual(["/exit"]); exited = true;
+    await p;
+    expect(started[0]).toMatchObject({ kind: "claude", cmd: undefined, pane: "pane" });
+    expect(started[0].args.slice(0, 2)).toEqual(["--resume", "claude-session"]);
+    expect(store.state.topics[41]).toMatchObject({ backend: "claude", pane: "new-pane", attached: true });
+    expect(closed).toEqual([]); expect(notices.at(-1)).toContain("claude");
+  });
+  test("/switch with nothing running resumes on the new backend now, or starts with it on the next message", async () => {
+    claudeTranscript();
+    store.state.topics[41] = { pane: "pane", cwd: dir, kind: "claude", backend: "claude", session: "claude-session" };
+    state = { state: "gone" };
+    await msg("/switch gw", 41);
+    expect(started[0]).toMatchObject({ cmd: "claude-gw" }); expect(started[0].args.slice(0, 2)).toEqual(["--resume", "claude-session"]);
+    store.state.topics[42] = { pane: "p2", cwd: dir, kind: "claude", session: "no-transcript" };
+    await msg("/switch gw", 42);
+    expect(started).toHaveLength(1); expect(store.state.topics[42].backend).toBe("gw");
   });
 });

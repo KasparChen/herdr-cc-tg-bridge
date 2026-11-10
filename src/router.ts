@@ -11,12 +11,13 @@ import type { Store } from "./store";
 import { MAX_DOWNLOAD, REACT, type Telegram } from "./telegram";
 import { limitsLine } from "./usage";
 import { locale, tr, zh } from "./i18n";
-import { newSessionSpec } from "./providers";
+import { newSpec } from "./backends";
 
 const HELP = () => (zh() ? [
   "<b>tg-bridge 用法</b>",
   "• <code>/new 名字</code>：新建话题和会话。也可以在客户端里手动建话题",
-  "• <code>/new codex 名字</code>：新建 Codex 会话；<code>/new claude 名字</code> 新建 Claude 会话",
+  "• <code>/new 后端 名字</code>：指定后端新建，比如 <code>/new codex 名字</code>。<code>/config</code> 看全部后端、改默认后端",
+  "• <code>/switch 后端</code>：本话题换后端接着原会话（同类后端之间，比如 claude 和自定义的 Claude 命令）",
   "• 电脑上已经在聊的会话，在那个会话里用 <code>/tg-bind</code> 接到这里",
   "• 在话题里发文字、图片、文件：送进对应会话",
   "• 话题里的 <code>/clear</code> 等斜杠命令原样送进会话",
@@ -28,7 +29,8 @@ const HELP = () => (zh() ? [
 ] : [
   "<b>How to use tg-bridge</b>",
   "• <code>/new name</code>: new topic and session. Creating a topic in the client works too",
-  "• <code>/new codex name</code>: start Codex; <code>/new claude name</code>: start Claude",
+  "• <code>/new backend name</code>: pick the backend, e.g. <code>/new codex name</code>. <code>/config</code> lists backends and sets the default",
+  "• <code>/switch backend</code>: carry on this topic's session on another backend of the same kind (e.g. claude and a custom Claude command)",
   "• A session already running on the computer: run <code>/tg-bind</code> in it to bring it here",
   "• Text, photos and files sent in a topic go to its session",
   "• <code>/clear</code> and other slash commands in a topic are passed to the session",
@@ -41,11 +43,11 @@ const HELP = () => (zh() ? [
 
 // Shown in the client's "/" menu for this group.
 export const COMMANDS = () => (zh() ? [
-  ["new", "新建话题和会话"], ["sessions", "列出全部会话"], ["close", "结束本话题的会话并关闭话题"],
+  ["new", "新建话题和会话"], ["config", "看后端、改默认后端"], ["switch", "本话题换后端接着聊"], ["sessions", "列出全部会话"], ["close", "结束本话题的会话并关闭话题"],
   ["delete", "结束会话并删除本话题"], ["stop", "打断当前回复"], ["screen", "看会话屏幕"], ["keys", "往会话发按键"],
   ["resend", "补发上一轮没确认发出的回答"], ["status", "看 bridge 状态和额度"], ["help", "用法"],
 ] : [
-  ["new", "New topic and session"], ["sessions", "List all sessions"], ["close", "End this topic's session and close the topic"],
+  ["new", "New topic and session"], ["config", "Backends and the default one"], ["switch", "Move this topic to another backend"], ["sessions", "List all sessions"], ["close", "End this topic's session and close the topic"],
   ["delete", "End the session and delete this topic"], ["stop", "Interrupt the current reply"], ["screen", "Show the session's screen"], ["keys", "Send key presses to the session"],
   ["resend", "Send again what may not have arrived"], ["status", "Bridge status and limits"], ["help", "How to use"],
 ]).map(([command, description]) => ({ command, description }));
@@ -88,14 +90,25 @@ export class Router {
     if (cmd === "/help" || cmd === "/start") { await this.tg.send(thread, HELP()); return; }
     if (cmd === "/status") { await this.tg.send(thread, this.status.text(undefined, this.status.paused)); return; }
     if (cmd === "/new") {
-      const { kind, name } = newSessionSpec(rest, this.cfg.agentKind);
-      const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, name: cut(name || `${tr("新会话", "New session")} ${new Date().toLocaleTimeString(locale(), { hour12: false })}`, 120) });
+      const { backend, name } = newSpec(rest, this.cfg.backends, this.life.defaultBackend());
+      const color = this.life.backend(backend)!.color;
+      const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, icon_color: color, name: cut(name || `${tr("新会话", "New session")} ${new Date().toLocaleTimeString(locale(), { hour12: false })}`, 120) });
       if (!j.ok) { await this.tg.notice(thread, tr(`❌ 建话题失败：${esc(j.description ?? "")}`, `❌ Could not create the topic: ${esc(j.description ?? "")}`)); return; }
       const tid = j.result.message_thread_id;
-      if (await this.life.open(tid, { kind, name: cut(name || `tg-${tid}`, 40), autoName: !name, fresh: true })) return;
+      if (await this.life.open(tid, { backend, name: cut(name || `tg-${tid}`, 40), autoName: !name, fresh: true })) return;
       // nothing is bound yet, so a message in the empty topic would start the default agent rather than the one asked for
       await this.tg.call("deleteForumTopic", { chat_id: this.cfg.chatId, message_thread_id: tid });
       await this.tg.notice(thread, tr("❌ 会话没有开起来，空话题已删除。确认电脑上的 Herdr 在运行，再发一次 /new", "❌ The session did not start, so the empty topic was removed. Check that Herdr is running on the computer, then send /new again"));
+      return;
+    }
+    if (cmd === "/config") {
+      if (rest[0]?.toLowerCase() === "default" && rest[1]) {
+        const ok = this.life.setDefaultBackend(rest[1].toLowerCase());
+        if (!ok) { await this.tg.notice(thread, tr(`没有叫 ${esc(rest[1])} 的后端。可用：${this.life.names()}`, `No backend named ${esc(rest[1])}. Available: ${this.life.names()}`)); return; }
+        log("default backend", rest[1].toLowerCase());
+      }
+      const { html, keyboard } = this.life.configView();
+      await this.tg.send(thread, html, { reply_markup: { inline_keyboard: keyboard } });
       return;
     }
     if (cmd === "/sessions") {
@@ -104,7 +117,7 @@ export class Router {
       return;
     }
     if (!thread) {
-      if (cmd === "/close" || cmd === "/delete") { await this.tg.notice(undefined, tr(`在要处理的话题里发 <code>${cmd}</code>，或者用 /sessions 里的按钮`, `Send <code>${cmd}</code> in the topic you mean, or use the buttons in /sessions`)); return; }
+      if (cmd === "/close" || cmd === "/delete" || cmd === "/switch") { await this.tg.notice(undefined, tr(`在要处理的话题里发 <code>${cmd}</code>，或者用 /sessions 里的按钮`, `Send <code>${cmd}</code> in the topic you mean, or use the buttons in /sessions`)); return; }
       if (Date.now() - this.lastHint > HINT_EVERY_MS) {
         this.lastHint = Date.now();
         await this.tg.notice(undefined, tr("在话题里发的消息才会送进会话。/new 新建，/sessions 看全部，/help 看用法", "Only messages in a topic reach a session. /new starts one, /sessions lists them, /help explains"));
@@ -113,6 +126,12 @@ export class Router {
     }
 
     if (cmd === "/close") { await this.life.close(thread, false); return; }
+    if (cmd === "/switch") {
+      if (rest[0]) { await this.life.switchTo(thread, rest[0].toLowerCase()); return; }
+      const { html, keyboard } = this.life.switchView(thread);
+      await this.tg.send(thread, html, { reply_markup: { inline_keyboard: keyboard } });
+      return;
+    }
     if (cmd === "/delete") {
       const { html, keyboard } = this.life.deletePrompt(thread);
       await this.tg.send(thread, html, { reply_markup: { inline_keyboard: keyboard } });
@@ -187,6 +206,16 @@ export class Router {
     const msg = q.message?.message_id;
     if (kind === "lc") return this.onLifecycle(a, Number(b), c === "l", msg);
     if (kind === "st") return this.status.beat(true);
+    if (kind === "cf" && a === "default") {
+      if (this.life.setDefaultBackend(b)) log("default backend", b);
+      const { html, keyboard } = this.life.configView();
+      if (msg) await this.tg.edit(msg, html, { reply_markup: { inline_keyboard: keyboard } });
+      return;
+    }
+    if (kind === "sw") {
+      if (msg) await this.tg.call("editMessageReplyMarkup", { chat_id: this.cfg.chatId, message_id: msg, reply_markup: { inline_keyboard: [] } });
+      return this.life.switchTo(Number(b), a);
+    }
     const thread = a, oi = c;
     const bind = this.store.state.topics[thread];
     if (kind !== "aq" || !bind) return;

@@ -20,7 +20,7 @@ export const transcriptPath = (cwd: string, session: string) =>
 // Search by the exact session id, never by cwd or "latest": concurrent sessions can share a directory.
 // Root arguments are injectable so tests do not inspect any personal session files.
 export function findTranscript(cwd: string, session: string, kind: AgentKind = "claude",
-  roots = { claude: join(homedir(), ".claude/projects"), codex: process.env.CODEX_HOME || join(homedir(), ".codex") }): string {
+  roots = { claude: join(process.env.CLAUDE_CONFIG_DIR || join(homedir(), ".claude"), "projects"), codex: process.env.CODEX_HOME || join(homedir(), ".codex") }): string {
   if (!/^[a-zA-Z0-9_-]+$/.test(session)) return "";
   if (kind === "claude") {
     const p = join(roots.claude, cwd.replace(/[^a-zA-Z0-9]/g, "-"), `${session}.jsonl`);

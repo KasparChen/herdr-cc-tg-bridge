@@ -8,6 +8,8 @@ import { log } from "./log";
 import { stripTags } from "./render";
 import { tr } from "./i18n";
 
+// a local Bot API server or a test double; read on every call so tests can set it
+const API = () => (process.env.TG_API_BASE ?? "https://api.telegram.org").replace(/\/$/, "");
 const PHOTO_EXT = new Set(["png", "jpg", "jpeg", "webp"]);
 export const MAX_DOWNLOAD = 20 * 1024 * 1024;
 export const MAX_UPLOAD = 50 * 1024 * 1024;
@@ -37,7 +39,7 @@ export class Telegram {
       try {
         const isForm = body instanceof FormData;
         // the abort signal alone has not always ended a request whose socket was closed under it; race a timer too
-        const req = fetch(`https://api.telegram.org/bot${this.token}/${method}`, {
+        const req = fetch(`${API()}/bot${this.token}/${method}`, {
           method: "POST",
           headers: isForm ? undefined : { "content-type": "application/json" },
           body: isForm ? body : JSON.stringify(body),
@@ -171,7 +173,7 @@ export class Telegram {
   async download(fileId: string, dest: string): Promise<string | undefined> {
     const j = await this.call("getFile", { file_id: fileId });
     if (!j.ok) return;
-    const r = await fetch(`https://api.telegram.org/file/bot${this.token}/${j.result.file_path}`);
+    const r = await fetch(`${API()}/file/bot${this.token}/${j.result.file_path}`);
     if (!r.ok) return;
     mkdirSync(dirname(dest), { recursive: true });
     await Bun.write(dest, r);

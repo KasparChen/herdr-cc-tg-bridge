@@ -4,11 +4,12 @@
 #   tg-bind off    disconnect: the topic is closed, this session keeps running
 # Only sessions started after `herdr integration install claude|codex` can be bound (the bridge needs their session id).
 # Codex passes its own session id (CODEX_THREAD_ID), so a wrong HERDR_PANE_ID never binds the neighbouring session.
+# ANTHROPIC_BASE_URL goes along so the bridge can tell a custom Claude backend (TG_BACKEND_<NAME>_BASE_URL) from Claude.
 set -eu
 PORT="${TG_BRIDGE_PORT:-18820}"
 [ -n "${HERDR_PANE_ID:-}" ] || { echo "tg-bind: HERDR_PANE_ID is not set (run this inside a Herdr pane)" >&2; exit 2; }
 off=false
 [ "${1:-}" = "off" ] && off=true
-payload=$(python3 -c 'import json,os,sys; print(json.dumps({"pane": os.environ["HERDR_PANE_ID"], "session": os.environ.get("CODEX_THREAD_ID"), "off": sys.argv[1] == "true"}))' "$off")
+payload=$(python3 -c 'import json,os,sys; print(json.dumps({"pane": os.environ["HERDR_PANE_ID"], "session": os.environ.get("CODEX_THREAD_ID"), "base_url": os.environ.get("ANTHROPIC_BASE_URL"), "off": sys.argv[1] == "true"}))' "$off")
 curl -s -m 60 -X POST -H 'content-type: application/json' --data "$payload" "http://127.0.0.1:$PORT/bind" || { echo '{"ok":false,"error":"bridge not running"}'; exit 1; }
 echo

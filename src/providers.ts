@@ -26,21 +26,24 @@ export function launchArgs(kind: AgentKind, resume: string | undefined, extra: s
 // { own: undefined } = none configured; undefined = Codex could not tell.
 export async function codexInstructions(extra: string[], cwd: string, bin = "codex"): Promise<{ own?: string } | undefined> {
   const marker = "tg-bridge-marker-5c1e";
-  const developer = async (args: string[]): Promise<string[] | undefined> => {
+  // every developer message's text parts; Codex 0.166 sends several, and the configured value is not in the first
+  const developer = async (args: string[]): Promise<string[][] | undefined> => {
     try {
       const p = Bun.spawn([bin, ...args, "debug", "prompt-input", "x"], { cwd, env: process.env, stdin: "ignore", stdout: "pipe", stderr: "ignore" });
       const timer = setTimeout(() => p.kill(), 10_000);
       const out = await new Response(p.stdout).text();
       clearTimeout(timer);
       if ((await p.exited) !== 0) return;
-      const m = JSON.parse(out).find((i: any) => i?.type === "message" && i.role === "developer");
-      return Array.isArray(m?.content) ? m.content.map((c: any) => typeof c?.text === "string" ? c.text : "") : undefined;
+      const ms = JSON.parse(out).filter((i: any) => i?.type === "message" && i.role === "developer" && Array.isArray(i.content));
+      return ms.length ? ms.map((m: any) => m.content.map((c: any) => typeof c?.text === "string" ? c.text : "")) : undefined;
     } catch { return; }
   };
   const [mine, marked] = await Promise.all([developer(extra), developer([...extra, "-c", `developer_instructions=${JSON.stringify(marker)}`])]);
-  const i = marked?.indexOf(marker) ?? -1;
-  if (!mine || i < 0) return;
-  return { own: mine.length === marked!.length ? mine[i].trim() || undefined : undefined };
+  const m = marked?.findIndex(parts => parts.includes(marker)) ?? -1;
+  if (!mine || m < 0) return;
+  const i = marked![m].indexOf(marker);
+  // with a value configured it sits where the marker went; without one the marker added a part there
+  return { own: mine[m]?.length === marked![m].length ? mine[m][i].trim() || undefined : undefined };
 }
 
 // The name Codex gave a session (from its first message, or /rename); the last entry in session_index.jsonl wins.
@@ -64,8 +67,3 @@ export const titleShows = (title: string | undefined, name: string) =>
 // it is in a pane only when that pane is the single one listed.
 export const panesShowing = (agents: Agent[], cwd: string, name: string) =>
   agents.filter(a => a.agent === "codex" && a.cwd === cwd && titleShows(a.terminal_title_stripped, name)).map(a => a.pane_id);
-
-export function newSessionSpec(args: string[], fallback: AgentKind = "claude") {
-  const explicit = agentKind(args[0]);
-  return { kind: explicit ?? fallback, name: (explicit ? args.slice(1) : args).join(" ") };
-}

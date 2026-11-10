@@ -2,6 +2,7 @@
 import { homedir } from "os";
 import { join, resolve } from "path";
 import { agentKind, type AgentKind } from "./providers";
+import { loadBackends, type Backend } from "./backends";
 
 export type Config = {
   token: string;
@@ -15,6 +16,8 @@ export type Config = {
   autosendExt: Set<string>;
   claudeArgs: string[];
   agentKind: AgentKind;
+  backends: Backend[];     // claude, codex and the custom ones from TG_BACKENDS
+  defaultBackend: string;  // from .env; /config can override it in state.json
   codexArgs: string[];
   statusIntervalSec: number;
   onlineWindowSec: number;
@@ -40,6 +43,9 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
   const expand = (p: string) => resolve(p.replace(/^~(?=\/|$)/, homedir()));
   const kind = agentKind(env.TG_AGENT_KIND?.trim() || "claude");
   if (!kind) throw new Error("TG_AGENT_KIND must be claude or codex");
+  const backends = loadBackends(env);
+  const defaultBackend = env.TG_DEFAULT_BACKEND?.trim().toLowerCase() || kind;
+  if (!backends.some(b => b.name === defaultBackend)) throw new Error(`TG_DEFAULT_BACKEND: no backend named "${defaultBackend}" (have ${backends.map(b => b.name).join(", ")})`);
   return {
     token,
     chatId: Number(chat),
@@ -52,6 +58,8 @@ export function loadConfig(env: Record<string, string | undefined> = process.env
     autosendExt: new Set((env.TG_AUTOSEND_EXT ?? DEFAULT_EXT).split(",").map(s => s.trim().toLowerCase().replace(/^\./, "")).filter(Boolean)),
     claudeArgs: (env.TG_CLAUDE_ARGS ?? "").split(/\s+/).filter(Boolean),
     agentKind: kind,
+    backends,
+    defaultBackend,
     codexArgs: (env.TG_CODEX_ARGS ?? "").split(/\s+/).filter(Boolean),
     statusIntervalSec: Number(env.TG_STATUS_INTERVAL ?? 30),
     onlineWindowSec: Number(env.TG_ONLINE_WINDOW ?? 90),

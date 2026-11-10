@@ -310,7 +310,7 @@ export class Watcher {
   private async syncTabName(a: H.Agent) {
     if (!this.bind.attached || Date.now() < this.nextNameCheck) return;
     this.nextNameCheck = Date.now() + 10_000;
-    const label = await H.tabLabel(a.workspace_id, a.tab_id);
+    const label = H.usefulLabel(await H.tabLabel(a.workspace_id, a.tab_id));
     if (!label || this.stopped) return;
     const name = cut(label, 120);
     if (name === this.bind.title) return;

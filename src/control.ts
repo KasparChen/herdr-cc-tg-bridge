@@ -47,7 +47,8 @@ export function startControl(cfg: Config, tg: Telegram, store: Store, status: St
           await life.close(thread, false);
           return Response.json({ ok: true, thread, closed: true });
         }
-        const r = await life.attach(String(body.pane), codexSession(body));
+        // base_url: the caller's ANTHROPIC_BASE_URL, which tells a custom Claude backend from plain Claude
+        const r = await life.attach(String(body.pane), codexSession(body), typeof body.base_url === "string" ? body.base_url : undefined);
         return Response.json(r, { status: r.ok ? 200 : 409 });
       }
       if (url.pathname === "/sim" && cfg.sim && body.callback) {

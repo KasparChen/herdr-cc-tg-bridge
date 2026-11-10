@@ -4,7 +4,8 @@ import { tmpdir } from "os";
 import { join } from "path";
 import { codexParser, findTranscript, TranscriptTail } from "../src/transcript";
 import { lastExchange } from "../src/lifecycle";
-import { codexInstructions, launchArgs, newSessionSpec } from "../src/providers";
+import { codexInstructions, launchArgs } from "../src/providers";
+import { loadBackends, newSpec } from "../src/backends";
 import { loadConfig } from "../src/config";
 
 const L = (type: string, payload: any) => JSON.stringify({ type, payload });
@@ -124,9 +125,10 @@ describe("provider and transcript routing", () => {
     expect(launchArgs("codex", undefined, ["-c", 'developer_instructions="mine"'], "prompt", {})).toEqual(["-c", 'developer_instructions="mine"']);
     expect(launchArgs("codex", "s", [], "prompt", undefined)).toEqual(["resume", "s"]); // Codex could not tell: never replace the user's value
     expect(launchArgs("claude", "s", [], "prompt")).toEqual(["--resume", "s", "--append-system-prompt", "prompt"]);
-    expect(newSessionSpec(["codex", "我的", "会话"])).toEqual({ kind: "codex", name: "我的 会话" });
-    expect(newSessionSpec(["我的会话"])).toEqual({ kind: "claude", name: "我的会话" });
-    expect(newSessionSpec([], "codex")).toEqual({ kind: "codex", name: "" });
+    const bs = loadBackends({});
+    expect(newSpec(["codex", "我的", "会话"], bs, "claude")).toEqual({ backend: "codex", name: "我的 会话" });
+    expect(newSpec(["我的会话"], bs, "claude")).toEqual({ backend: "claude", name: "我的会话" });
+    expect(newSpec([], bs, "codex")).toEqual({ backend: "codex", name: "" });
   });
   // runs the real Codex CLI offline (debug prompt-input makes no model call) against a throwaway CODEX_HOME
   test.skipIf(!Bun.which("codex"))("the user's developer_instructions are read from Codex itself, whichever layer sets them", async () => {
