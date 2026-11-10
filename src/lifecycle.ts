@@ -221,18 +221,6 @@ export class Lifecycle {
 
   names() { return this.cfg.backends.map(b => b.name).join(", "); }
 
-  // /config: the default backend, one button per backend
-  configView(): { html: string; keyboard: any[][] } {
-    const cur = this.defaultBackend();
-    const lines = this.cfg.backends.map(b => `${b.name === cur ? "✅" : "▫️"} <code>${esc(b.name)}</code>${b.cmd ? ` · <code>${esc(cut(b.cmd, 40))}</code>` : ""}`);
-    return {
-      html: [tr(`<b>默认后端：${esc(cur)}</b>`, `<b>Default backend: ${esc(cur)}</b>`),
-        tr("<code>/new 名字</code> 和客户端里新建的话题用它。<code>/new 后端 名字</code> 单独指定", "Used by <code>/new name</code> and topics created in the client. <code>/new backend name</code> picks one per topic"),
-        ...lines].join("\n"),
-      keyboard: [this.cfg.backends.map(b => ({ text: `${b.name === cur ? "✅ " : ""}${b.name}`, callback_data: `cf:default:${b.name}` }))],
-    };
-  }
-
   // /switch with no argument: the backends this topic can move to
   switchView(thread: number): { html: string; keyboard: any[][] } {
     const b = this.store.state.topics[thread];

@@ -1,5 +1,6 @@
 // Backends: named ways to start a session. `claude` and `codex` are Herdr's own agents; custom ones (e.g. a wrapper
 // that points Claude Code at another gateway) are shell commands from .env, run in the pane and then named for Herdr.
+import { homedir } from "os";
 import type { AgentKind } from "./providers";
 import type { Binding } from "./store";
 
@@ -8,6 +9,7 @@ export type Backend = {
   kind: AgentKind;  // argument format and where the transcript lives
   cmd?: string;     // custom: shell text run in the pane; built-ins use `herdr agent start --kind`
   baseUrl?: string; // custom Claude backends: an ANTHROPIC_BASE_URL equal to this marks a desktop session as this backend
+  keyFile?: string; // custom: file holding the API key the command uses; only its last 4 characters are ever shown
   color: number;    // topic icon colour (Telegram accepts only these six)
 };
 
@@ -29,7 +31,8 @@ export function loadBackends(env: Record<string, string | undefined>): Backend[]
     if (!cmd) throw new Error(`${key}_CMD is missing: the command that starts the "${name}" backend`);
     const kind = (env[`${key}_KIND`]?.trim() || "claude") as AgentKind;
     if (kind !== "claude" && kind !== "codex") throw new Error(`${key}_KIND must be claude or codex`);
-    out.push({ name, kind, cmd, baseUrl: env[`${key}_BASE_URL`]?.trim() || undefined, color: CUSTOM_COLORS[i % CUSTOM_COLORS.length] });
+    const keyFile = env[`${key}_KEY_FILE`]?.trim().replace(/^~(?=\/|$)/, homedir()) || undefined;
+    out.push({ name, kind, cmd, baseUrl: env[`${key}_BASE_URL`]?.trim() || undefined, keyFile, color: CUSTOM_COLORS[i % CUSTOM_COLORS.length] });
   });
   return out;
 }

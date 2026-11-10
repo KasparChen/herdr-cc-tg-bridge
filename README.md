@@ -217,7 +217,7 @@ The installer does all of this for you. These are the same steps by hand, for Li
    | `HERDR_WORKSPACE` | no | Herdr workspace (id or label) for new sessions |
    | `TG_AUTOSEND_EXT` | no | Extensions sent back automatically; `md` and `txt` are off by default |
    | `TG_CLAUDE_ARGS` | no | Extra arguments for `claude` in new sessions |
-   | `TG_BACKENDS` | no | Custom backends, comma separated, e.g. `gw`. Each needs `TG_BACKEND_<NAME>_CMD` (the shell command that starts it); optional `_KIND` (`claude`, default, or `codex`) and `_BASE_URL` (a desktop session whose `ANTHROPIC_BASE_URL` equals it is recognised as this backend by `/tg-bind`) |
+   | `TG_BACKENDS` | no | Custom backends, comma separated, e.g. `gw`. Each needs `TG_BACKEND_<NAME>_CMD` (the shell command that starts it); optional `_KIND` (`claude`, default, or `codex`) `_BASE_URL` (a desktop session whose `ANTHROPIC_BASE_URL` equals it is recognised as this backend by `/tg-bind`) and `_KEY_FILE` (the key file the command reads; `/config` shows only its last 4 characters) |
    | `TG_DEFAULT_BACKEND` | no | Backend for `/new name` and topics created in the client until `/config` changes it: `claude` (default), `codex` or a custom one |
    | `TG_USAGE_FILE`, `TG_FABLE_USAGE_FILE` | no | JSON files with plan limits to display (format in `.env.example`) |
    | `TG_BRIDGE_LANG` | no | Language of the bot's messages: `en` (default) or `zh` |
@@ -245,7 +245,7 @@ The installer does all of this for you. These are the same steps by hand, for Li
 |---|---|---|
 | Anywhere | `/new name` | New topic + new session. Without a name, the topic is renamed after the session's title |
 | Anywhere | `/new backend name` | Same, on that backend (`claude`, `codex` or one from `TG_BACKENDS`). The topic icon colour shows the backend |
-| Anywhere | `/config` | Lists the backends; a button sets the default for `/new`. `/config default codex` does the same in text |
+| Anywhere | `/config` | Control panel in one message: bridge state, default backend and topics per backend. Buttons open the default backend (endpoint, masked API key, switch) and each backend's details; every page has Back, and Close folds the panel to one line. `/config default codex` sets the default in text |
 | In a topic | `/switch backend` | Ends the session and resumes the same one on another backend of the same kind (e.g. `claude` ↔ a custom Claude command). Without a backend it shows buttons. Claude and Codex cannot continue each other's sessions |
 | Anywhere | `/sessions` | All sessions with state, context use and last activity, plus plan limits; one row of buttons each (close / resume / reopen, delete) |
 | Anywhere | `/status`, `/help` | Bridge status and plan limits, help |

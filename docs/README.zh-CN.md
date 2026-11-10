@@ -108,7 +108,7 @@ cp .env.example .env
 | `HERDR_WORKSPACE` | 否 | 新会话开在哪个 Herdr Space，填 ID 或名字都可以。不填就开在当前 Space |
 | `TG_AUTOSEND_EXT` | 否 | 自动回传的文件扩展名。默认不含 `md` 和 `txt`，避免把笔记和草稿发出去 |
 | `TG_CLAUDE_ARGS` | 否 | 启动新会话时附加给 `claude` 的参数 |
-| `TG_BACKENDS` | 否 | 自定义后端名，逗号分隔，例如 `gw`。每个都要配 `TG_BACKEND_<名>_CMD`（启动它的 shell 命令）；可选 `_KIND`（`claude`，默认，或 `codex`）和 `_BASE_URL`（电脑会话的 `ANTHROPIC_BASE_URL` 等于它时，`/tg-bind` 认成这个后端） |
+| `TG_BACKENDS` | 否 | 自定义后端名，逗号分隔，例如 `gw`。每个都要配 `TG_BACKEND_<名>_CMD`（启动它的 shell 命令）；可选 `_KIND`（`claude`，默认，或 `codex`）、`_BASE_URL`（电脑会话的 `ANTHROPIC_BASE_URL` 等于它时，`/tg-bind` 认成这个后端）和 `_KEY_FILE`（启动命令读的 key 文件，`/config` 只显示末 4 位） |
 | `TG_DEFAULT_BACKEND` | 否 | `/new 名字` 和客户端里新建的话题用哪个后端，`/config` 改过之后以 `/config` 为准：`claude`（默认）、`codex` 或自定义的 |
 | `TG_BRIDGE_LANG` | 否 | bot 消息的语言，`en`（默认）或 `zh`。一键安装会按你运行时选的语言写好 |
 
@@ -162,7 +162,7 @@ Herdr 服务要等你打开 Herdr 才会运行。在那之前 bridge 能收到�
 |---|---|---|
 | 任意位置 | `/new 名字` | 新建话题和会话。不写名字时，等会话起好标题后自动改名 |
 | 任意位置 | `/new 后端 名字` | 同上，指定后端（`claude`、`codex` 或 `TG_BACKENDS` 里的）。话题图标颜色区分后端 |
-| 任意位置 | `/config` | 列出全部后端，点按钮设为 `/new` 的默认后端。也可以发 `/config default codex` |
+| 任意位置 | `/config` | 一条消息里的控制面板：bridge 状态、默认端点、各端点的话题数。按钮进入默认端点页（网关、API key 末 4 位、切换）和各端点详情，每页都能返回，收起后只剩一行。也可以发 `/config default codex` 直接设默认 |
 | 话题里 | `/switch 后端` | 结束当前会话，用同类的另一个后端接着同一个会话（比如 `claude` 和自定义的 Claude 命令之间）。不写后端时给按钮。Claude 和 Codex 之间不能互接 |
 | 任意位置 | `/sessions` | 列出全部会话、状态、上下文占用、最后活动时间和额度，每个会话一排按钮（关闭或接回或重开，以及删除） |
 | 电脑上的会话里 | `/tg-bind`，断开用 `/tg-bind off` | 把这个会话接到一个新话题，先发接手卡片和上一轮回答，之后两边同步 |
