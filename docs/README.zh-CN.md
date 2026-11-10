@@ -81,7 +81,7 @@ cd ~/tg-sessions && ~/.local/bin/claude
 
 1. 准备一台 macOS 电脑（Linux 理论上可用但未测，登录自启脚本只支持 macOS），装好下面这些软件。
    - [Bun](https://bun.sh)（在 1.3.14 上测试过）
-   - Herdr（在 0.8.0 上测试过，0.9.x 未测）
+   - Herdr（在 0.8.0 和 0.9.5 上测试过）
    - Claude Code
    - `python3` 和 `curl`（`bin/tg-send` 要用）
 2. 执行 `herdr integration install claude`，安装 Herdr 的 Claude 集成。它会给 Claude Code 加一个启动 hook，把会话 ID 报给 Herdr。bridge 只能接管装好这个 hook 之后启动的会话。

@@ -187,7 +187,7 @@ Design notes, trade-offs and the record of decisions: [docs/PRD-v1.md](docs/PRD-
 
 - macOS (Linux should work but is untested; `bin/install-launchd` and `caffeinate` are macOS only)
 - [Bun](https://bun.sh) (tested with 1.3.14)
-- [Herdr](https://herdr.dev) ([source](https://github.com/herdrdev/herdr), tested with 0.8.0; the installer gets the latest, 0.9.x is untested), with its Claude integration: `herdr integration install claude`
+- [Herdr](https://herdr.dev) ([source](https://github.com/herdrdev/herdr), tested with 0.8.0 and 0.9.5), with its Claude integration (`herdr integration install claude`) and, for Codex, `herdr integration install codex`
 - [Claude Code](https://code.claude.com/docs)
 - `python3` (Herdr's Claude hook is a Python script) and `curl`
 
