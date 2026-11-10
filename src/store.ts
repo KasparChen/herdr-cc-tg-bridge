@@ -1,8 +1,11 @@
 // Persistent bridge state: Telegram update offset and topic <-> pane bindings.
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from "fs";
 import { join } from "path";
+import type { AgentKind } from "./providers";
 
 export type Binding = {
+  kind?: AgentKind;     // absent in pre-Codex state files: Claude, for backwards compatibility
+  backend?: string;     // absent before v4: see backendName
   pane: string; tab?: string; session?: string; cwd: string; title?: string; autoName?: boolean;
   name?: string;        // label given when the topic was bound; shown until the session has a title
   terminal?: string;    // Herdr terminal id of the pane, so a reused pane id is never mistaken for ours
@@ -12,7 +15,7 @@ export type Binding = {
   attached?: boolean;   // a desktop session bound with tg-bind: closing or deleting the topic only disconnects it
   ctxWarned?: boolean;  // the topic was told the context is nearly full; cleared once it drops again
 };
-export type State = { offset: number; topics: Record<string, Binding>; statusMessage?: number };
+export type State = { offset: number; topics: Record<string, Binding>; statusMessage?: number; defaultBackend?: string };
 
 export class Store {
   state: State;
@@ -32,6 +35,11 @@ export class Store {
   }
   topicOfPane(pane: string): number | undefined {
     const hit = Object.entries(this.state.topics).find(([, b]) => b.pane === pane && !b.closedAt);
+    return hit ? Number(hit[0]) : undefined;
+  }
+  // Codex sessions name themselves (CODEX_THREAD_ID): their HERDR_PANE_ID can be another pane's, see Watcher.tick
+  topicOfSession(session: string): number | undefined {
+    const hit = Object.entries(this.state.topics).find(([, b]) => b.session === session && !b.closedAt);
     return hit ? Number(hit[0]) : undefined;
   }
 }

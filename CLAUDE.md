@@ -16,14 +16,18 @@ Bun + TypeScript, no runtime dependencies. Read `README.md` for what it does, `d
 
 ## Known behaviour (verified)
 
-- A freshly created Herdr pane rejects `herdr agent start` with `agent_pane_busy` for a moment; `spawnClaude` retries every 0.5 s.
+- A freshly created Herdr pane rejects `herdr agent start` with `agent_pane_busy` for a moment; `spawnAgent` retries every 0.5 s.
 - `herdr agent prompt <pane> <text>` takes dash-leading text literally; adding `--` breaks it.
 - `herdr agent wait` can match the previous turn's leftover `done`; the Watcher only finishes a turn after seeing `working` (or after 5 s).
 - Under launchd, `/bin/sh` cannot read files in macOS privacy-protected folders (`Operation not permitted`); the job runs through `/bin/bash`, which needs Full Disk Access.
 - After the supervisor itself is killed, the first restart may hit `EADDRINUSE` or a timed-out poll while the old process winds down; both recover by retry within about a minute.
 - `/send` and `/sim` reject anything but `application/json` (415): a web page could otherwise POST text/plain to localhost without a CORS preflight.
-- Question buttons are only offered for a single single-select `AskUserQuestion`; with several questions the key presses would land on whichever question is active.
+- Question buttons are only offered for a single single-select `AskUserQuestion`; with several questions the key presses would land on whichever question is active. Codex `request_user_input` is parsed as `AskUserQuestion` (same fields; verified on Codex CLI 0.162: Herdr shows `blocked`, down × n + enter picks option n, and Codex appends its own "None of the above" after the listed options).
 - Claude Code transcript path: `~/.claude/projects/<cwd with every non-alphanumeric char replaced by '-'>/<session>.jsonl`.
+- Codex transcript path: `$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<session>.jsonl` (or `archived_sessions/`). Each message is written twice (`event_msg` and `response_item`); only `response_item` is read, and `task_complete` / `turn_aborted` end the turn. `herdr agent get` reports the kind in `agent` (`claude`, `codex`, ...).
+- Codex 0.162's shared app-server (`codex app-server --managed-daemon`) runs all plainly started TUI sessions' commands and hooks with the first pane's environment: `HERDR_PANE_ID` and Herdr's `agent_session` can belong to another pane, `CODEX_THREAD_ID` is right. Codex callers are therefore looked up by session id. Herdr's `cwd` and terminal title are per pane, and Codex's default title is "<session name> | <folder>" (name from `session_index.jsonl`), so a shared session (`session_meta.source` = `vscode`; `cli` = own process) is placed by its name in the title, and a new session id is followed only if its `session_meta.cwd` equals the pane's `cwd` and, when shared, the pane's title shows its name.
+- Codex runs a skill's command in its sandbox (no network, so no 127.0.0.1). An execpolicy allow rule (`prefix_rule(..., decision="allow")` in `$CODEX_HOME/rules/default.rules`) runs a command outside it without asking, even with `approval_policy = "never"`; "don't ask again" on an approval writes the same rule. The shared app-server reads rules when it starts, not after edits.
+- Codex 0.162 profiles are `$CODEX_HOME/NAME.config.toml` (a `[profiles.NAME]` table in config.toml is refused), and a trusted project's `.codex/config.toml` is layered on top. `codex debug prompt-input` renders the final prompt offline; `developer_instructions` is a block of the first developer message. Bun.spawn uses the environment the process started with unless `env` is passed.
 - Herdr CLI errors (`agent_not_found`, `pane_not_found`, ...) are JSON on stderr with exit code 0; `herdr()` parses stderr when stdout is empty.
 - Herdr agent names must match `[a-z][a-z0-9_-]{0,31}`; the bridge always uses `tg-<thread>` and puts the topic name on the tab label only.
 - After `/exit` the agent disappears but the pane stays as a shell (`paneState` = exited); `claude --resume <id>` in that same pane keeps the session id and the context.

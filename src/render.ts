@@ -29,8 +29,9 @@ export const commentLine = (text: string) => `💬 ${cut(text.replace(/[*`#_]/g,
 export const isComment = (line: string) => /^(💬|🖥)/u.test(line);
 
 // Collapsed view shows the first three lines: status, counters, "...".
-export function bubble(lines: string[], calls: number, secs: number, done: boolean, max = 3600, extra = ""): string {
-  const head = `<b>${done ? tr("✅ 完成", "✅ Done") : tr("⚙️ 执行中", "⚙️ Working")}</b>\n<i>🔧 ${tr(`${calls} 次调用`, `${calls} call${calls === 1 ? "" : "s"}`)} · ${fmtSecs(secs)}${extra ? ` · ${esc(extra)}` : ""}</i>`;
+// done: true = finished, false = still working, "interrupted" = ended by an interruption (Codex reports it)
+export function bubble(lines: string[], calls: number, secs: number, done: boolean | "interrupted", max = 3600, extra = ""): string {
+  const head = `<b>${done === "interrupted" ? tr("⏹ 已中断", "⏹ Interrupted") : done ? tr("✅ 完成", "✅ Done") : tr("⚙️ 执行中", "⚙️ Working")}</b>\n<i>🔧 ${tr(`${calls} 次调用`, `${calls} call${calls === 1 ? "" : "s"}`)} · ${fmtSecs(secs)}${extra ? ` · ${esc(extra)}` : ""}</i>`;
   let body = lines.map(l => (isComment(l) ? `<b>${esc(l)}</b>` : esc(l)));
   while (body.length && body.join("\n").length > max) body = body.slice(1);
   return `<blockquote expandable>${head}${body.length ? "\n...\n" + body.join("\n") : ""}</blockquote>`;

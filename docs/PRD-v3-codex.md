@@ -1,0 +1,32 @@
+# Codex sessions alongside Claude
+
+## Behavior
+
+- `/new name` keeps the current default (Claude unless `TG_AGENT_KIND=codex`). `/new codex name` and `/new claude name` select explicitly.
+- Run `bin/tg-bind` in an existing Herdr agent session. Codex has no custom slash commands, so its skill is `$tg-bind`, which `install.sh` offers to install. Codex runs the skill's command in its sandbox, which blocks the local connection: with approvals allowed Codex asks once ("don't ask again" adds an allow rule itself); with `approval_policy = "never"` and no network in the sandbox, the installer offers an allow rule for `bin/tg-bind` and `bin/tg-send` only in that case. `!<path>/bin/tg-bind` runs it outside the sandbox. The provider comes from Herdr (`agent` in `herdr agent get`). Codex callers also send their `CODEX_THREAD_ID`; the bridge rejects a pane running another session instead of binding a neighbouring agent.
+- Topics retain their provider through bridge restart, close/reopen and resume. Old bindings with no provider remain Claude. Resume uses `codex resume SESSION_ID`; Claude keeps `claude --resume SESSION_ID`.
+- Attached desktop sessions use the Herdr tab label as their topic name and follow desktop renames within about 10 seconds; renaming the topic in Telegram renames the tab. Transcript-generated titles cannot overwrite that name. Telegram-created sessions keep the existing naming behavior.
+- Attached desktop sessions stay running when the topic is closed or deleted. Replies, commentary and tool progress are read from the exact session's transcript. Reasoning and system/developer instructions are excluded.
+- Codex keeps its existing model, permission and sandbox settings. The bridge adds no bypass flags. Like `--append-system-prompt` for Claude, Codex sessions it starts get a short note (the user is on a phone; send files with `tg-send`) through `-c developer_instructions=`. That option replaces a configured value, so the user's own `developer_instructions` is kept in front of the note. The bridge asks Codex for it (`codex debug prompt-input`, offline, no model call) rather than reading config files, so every layer counts: `config.toml`, a `NAME.config.toml` profile, a trusted project's `.codex/config.toml`, `-c` in `TG_CODEX_ARGS`. If `TG_CODEX_ARGS` sets it, or Codex cannot be asked, the bridge adds nothing. `tg-send` posts to the bridge on 127.0.0.1, which Codex's default `workspace-write` sandbox blocks, so the note tells Codex to rerun it with escalated permissions; the approval screen reaches Telegram as a waiting-screen notice (`/keys y`). With `approval_policy = "never"` and no network access, Codex cannot send files. `TG_CODEX_ARGS` takes extra native CLI options the same way `TG_CLAUDE_ARGS` does, e.g. `--model MODEL`. An interrupted Codex turn (`turn_aborted`) relays no answer (final text is held until the turn completes and dropped when it is aborted) and its progress bubble says ⏹ Interrupted instead of ✅ Done.
+
+## Prerequisites
+
+Herdr must have a working `codex` executable and the Codex integration: `herdr integration status`. If missing, install with `herdr integration install codex` and start the session again. Session JSONL records must be available under `$CODEX_HOME/sessions` (default `~/.codex/sessions`) or `archived_sessions`. A session that has not written its file yet can still be bound, as with Claude; relaying starts once the file appears.
+
+## Scope
+
+This supports Codex sessions managed by a Herdr pane. It does not claim to control an unrelated desktop-app conversation without such a pane. Session id checks enforce that boundary. Codex's `request_user_input` has AskUserQuestion's questions/options shape, blocks the pane the same way and is answered with the same keys (down × n, enter; each answer moves on to the next question), so it is read as AskUserQuestion and a single question gets the same buttons. In Codex CLI it is only offered in Plan mode or with `--enable default_mode_request_user_input`; otherwise Codex asks in its reply. Approval and folder-trust screens use the existing waiting-screen notice and `/keys`. Files produced by Codex scripts or patches are sent with `bin/tg-send PATH`; automatic Write-tool delivery remains Claude-specific.
+
+### Codex's shared app-server
+
+Codex CLI 0.162 runs plainly started TUI sessions in one shared background process (`codex app-server --managed-daemon`), which runs every session's commands and hooks with the environment of the pane that started it first. `CODEX_THREAD_ID` stays correct, but `HERDR_PANE_ID` can name another pane, so Herdr can credit a session to the wrong pane. The bridge does not change how Codex runs; it relies on the session id instead:
+
+- `tg-send` and `tg-bind off` from Codex find the topic by `CODEX_THREAD_ID` and never fall back to the pane, so a file cannot reach another session's topic.
+- A shared session (its rollout says `source: "vscode"`) is placed by its name, which Codex shows in its pane's terminal title; Herdr reads every pane's title on its own. `tg-bind` binds the one Codex pane in the session's folder whose title shows that name. Before its first message a session has no name yet, and two panes can show the same name; both are refused with the reason (`/rename` gives a unique name). A session in its own process is checked against Herdr as before.
+- When Herdr reports a new session for a bound pane (`/clear`, restart), the topic follows it only if no other topic has it, it started in the pane's folder and, for a shared session, the pane's title shows its name. Until that can be told (no file or name before the first message, the name in two panes, the title not updated yet) it is looked at again every few seconds; only a session started in another folder is ruled out for good.
+
+Sessions the bridge starts pass `-c` options and, with Codex 0.162, run outside the shared process.
+
+## Validation
+
+Tests use fake Telegram and Herdr objects and temporary transcripts, covering mixed-provider lifecycle, persistent bindings, last-exchange handoff, commentary/final separation, duplicate mirror records, interruptions, exact-id lookup, mismatched-session rejection (including an already-bound pane and `tg-send`), following a new session only from the pane's folder, interrupted and multiple turns in one poll, and two-way topic/tab renames. Real Telegram round-trip requires installing into the user's running bridge; unit and offline lifecycle tests do not claim that verification.

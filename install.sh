@@ -115,8 +115,18 @@ uninstall() {
   ok "已停止并移除后台服务" "Stopped and removed the background service"
   say "  代码和配置还在 ${ROOT}，状态和日志在 ${STATE}，不需要了可以手动删除。" \
       "  The code and settings remain in ${ROOT}, state and logs in ${STATE}. Delete them by hand if you no longer need them."
-  say "  Herdr 的 Claude 集成仍保留，要移除就运行 herdr integration uninstall claude。" \
-      "  Herdr's Claude integration stays; remove it with herdr integration uninstall claude."
+  say "  Herdr 的 Claude（和 Codex）集成仍保留，要移除就运行 herdr integration uninstall claude（codex）。" \
+      "  Herdr's Claude (and Codex) integration stays; remove it with herdr integration uninstall claude (codex)."
+  # the Codex $tg-bind skill and allow rule run this install's scripts, so they go with it
+  CODEX_DIR="${CODEX_HOME:-${HOME}/.codex}" RULES="${CODEX_HOME:-${HOME}/.codex}/rules/default.rules"
+  if grep -qs "herdr-cc-tg-bridge" "${CODEX_DIR}/skills/tg-bind/SKILL.md"; then
+    run rm -rf "${CODEX_DIR}/skills/tg-bind"
+    ok "已移除 Codex 的 \$tg-bind" "Removed \$tg-bind from Codex"
+  fi
+  if grep -qs "${ROOT}/bin/tg-" "${RULES}"; then
+    [ "${DRY}" = 1 ] || { grep -v -e "${ROOT}/bin/tg-" -e "^# herdr-cc-tg-bridge:" "${RULES}" >"${RULES}.tmp" && mv "${RULES}.tmp" "${RULES}"; }
+    ok "已移除 Codex 里为 tg-bind / tg-send 加的放行规则" "Removed the Codex allow rule for tg-bind / tg-send"
+  fi
 }
 
 # The Herdr and Claude installers put their commands in ~/.local/bin but do not add it to PATH for new terminals.
@@ -223,6 +233,13 @@ step "3/5 配置 Herdr" "3/5 Setting up Herdr"
 run mkdir -p "${CLAUDE_CONFIG_DIR:-${HOME}/.claude}"
 run herdr integration install claude >/dev/null
 ok "Herdr 的 Claude 集成已安装" "Herdr's Claude integration is installed"
+# Codex is optional; its integration reports Codex session ids the same way (needed by /new codex and tg-bind).
+if have codex; then
+  run mkdir -p "${CODEX_HOME:-${HOME}/.codex}"
+  run herdr integration install codex >/dev/null
+  ok "Herdr 的 Codex 集成已安装" "Herdr's Codex integration is installed"
+  codex_bind
+fi
 if [ "${DRY}" = 0 ] && ! herdr_up; then
   mkdir -p "${STATE}"
   nohup herdr server >"${STATE}/herdr-server.log" 2>&1 &
@@ -234,6 +251,62 @@ if [ "${DRY}" = 0 ] && ! herdr workspace list 2>/dev/null | WS="${WORKSPACE}" bu
   herdr workspace create --label "${WORKSPACE}" --cwd "${HOME}" >/dev/null
 fi
 ok "Herdr 工作区 ${WORKSPACE}，Telegram 里开的会话都放在这里" "Herdr workspace ${WORKSPACE}, where sessions opened from Telegram go"
+}
+
+# Optional: $tg-bind in Codex, which has no custom slash commands; a skill is called with $. Codex runs the skill's
+# command in its sandbox, which cannot reach the bridge on 127.0.0.1. Where approvals are allowed (the default) Codex
+# asks once and can remember it; only with approvals off and no network in the sandbox is an allow rule for the
+# bridge's two commands the way through, so only then is one offered.
+codex_bind() {
+  CODEX_DIR="${CODEX_HOME:-${HOME}/.codex}"
+  ask_yes "在 Codex 里启用 \$tg-bind（把电脑上的 Codex 会话接到 Telegram）？" "Enable \$tg-bind in Codex (hand a desktop Codex session over to Telegram)?" || return 0
+  run mkdir -p "${CODEX_DIR}/skills/tg-bind"
+  [ "${DRY}" = 1 ] || codex_skill >"${CODEX_DIR}/skills/tg-bind/SKILL.md"
+  ok "Codex 里输入 \$tg-bind 接管会话，\$tg-bind off 断开" "In Codex, type \$tg-bind to hand a session over, \$tg-bind off to disconnect"
+  codex_blocked || return 0
+  warn "你的 Codex 设置为不申请批准（approval_policy = \"never\"），沙箱又不能联网，\$tg-bind 和 tg-send 会被拦下" \
+       "Your Codex never asks for approval (approval_policy = \"never\") and its sandbox has no network, so \$tg-bind and tg-send are blocked"
+  say "    可以把 ${CODEX_DIR}/config.toml 里的 approval_policy 改成 \"on-request\"，或者只放行 bridge 的这两个命令。" \
+      "    Either set approval_policy to \"on-request\" in ${CODEX_DIR}/config.toml, or allow just these two bridge commands."
+  # never under --yes: an allow rule changes what Codex's sandbox lets through
+  [ "${YES}" = 0 ] && ask_yes "放行 ${ROOT}/bin/tg-bind 和 tg-send？" "Allow ${ROOT}/bin/tg-bind and tg-send?" || return 0
+  RULES="${CODEX_DIR}/rules/default.rules"
+  if [ "${DRY}" = 0 ] && ! grep -qs "${ROOT}/bin/tg-bind" "${RULES}"; then
+    mkdir -p "${CODEX_DIR}/rules"
+    printf '%s\n' "# herdr-cc-tg-bridge: tg-bind and tg-send talk to the bridge on 127.0.0.1" \
+      "prefix_rule(pattern=[\"${ROOT}/bin/tg-bind\"], decision=\"allow\")" \
+      "prefix_rule(pattern=[\"${ROOT}/bin/tg-send\"], decision=\"allow\")" >>"${RULES}"
+  fi
+  ok "已放行。正在运行的 Codex 后台进程要重启一次才会读到：codex app-server daemon restart（会中断正在跑的 Codex 会话）" \
+     "Allowed. A running Codex background server reads it after one restart: codex app-server daemon restart (interrupts running Codex sessions)"
+}
+
+# 0 when Codex can neither ask for approval nor reach the network from its sandbox (active profile first, as in Codex)
+codex_blocked() {
+  CODEX_DIR="${CODEX_DIR}" bun -e '
+    let c = {}; try { c = Bun.TOML.parse(await Bun.file(process.env.CODEX_DIR + "/config.toml").text()); } catch {}
+    const p = c.profiles?.[c.profile] ?? {};
+    const approval = p.approval_policy ?? c.approval_policy, sandbox = p.sandbox_mode ?? c.sandbox_mode;
+    const net = (p.sandbox_workspace_write ?? c.sandbox_workspace_write)?.network_access === true;
+    process.exit(approval === "never" && sandbox !== "danger-full-access" && !(sandbox === "workspace-write" && net) ? 0 : 1);' 2>/dev/null
+}
+
+codex_skill() {
+cat <<SKILL
+---
+name: tg-bind
+description: Hand this Codex session over to a Telegram topic via herdr-cc-tg-bridge (\$tg-bind), or disconnect it (\$tg-bind off).
+---
+
+Run exactly one command, written exactly like this, then report its JSON result in one line:
+
+- No argument: \`${ROOT}/bin/tg-bind\`
+- Argument \`off\`: \`${ROOT}/bin/tg-bind off\`
+
+It posts to the bridge on 127.0.0.1, so a sandbox without network makes it fail ("bridge not running"); then run it again with escalated permissions. If it then still says \`bridge not running\`, tell the user to check \`${ROOT}/bin/tg-bridge status\`. If the error asks to send a message first or to /rename the session, tell the user exactly that. \`HERDR_PANE_ID is not set\` means this session is not in a Herdr pane and cannot be bound.
+
+After a successful bind (not \`off\`): the user is now reading your replies on a phone in Telegram. Keep replies short, put the conclusion first, and avoid wide tables. To send a file to the phone, run \`${ROOT}/bin/tg-send <file>...\`.
+SKILL
 }
 
 # --- 4. Telegram -------------------------------------------------------------------------------------------------
@@ -290,7 +363,7 @@ After=network-online.target
 [Service]
 WorkingDirectory=${ROOT}
 ExecStart=${ROOT}/bin/tg-bridge
-Environment=PATH=$(dirname "$(command -v bun)"):$(dirname "$(command -v herdr)"):/usr/local/bin:/usr/bin:/bin
+Environment=PATH=$(dirname "$(command -v bun)"):$(dirname "$(command -v herdr)")$(have codex && printf ':%s' "$(dirname "$(command -v codex)")"):/usr/local/bin:/usr/bin:/bin
 Restart=on-failure
 RestartSec=5
 StandardOutput=append:${STATE}/bridge.log
@@ -332,6 +405,11 @@ step "完成。还剩三件事要你自己做：" "Done. Three things are left f
 say "  1. 登录 Claude Code，并信任会话目录。运行下面这行，按提示登录，看到「是否信任此文件夹」选信任，然后输入 /exit 退出：" \
     "  1. Log in to Claude Code and trust the session folder. Run the line below, log in, choose to trust the folder when asked, then type /exit:"
 echo "       cd ${WORKDIR} && ${CLAUDE_BIN}"
+if have codex; then
+  say "     要用 Codex（/new codex），也在这个目录运行一次 codex，同样选信任后退出：" \
+      "     To use Codex (/new codex), also run codex once in this folder, trust it the same way, then quit:"
+  echo "       cd ${WORKDIR} && $(command -v codex)"
+fi
 say "  2. 打开群，General 里有一条置顶的 🟢 状态消息。发 /new 新建第一个会话，会出现一个新话题。" \
     "  2. Open the group. General has a pinned 🟢 status message. Send /new to start the first session; it opens a new topic."
 say "  3. Herdr 服务不会开机自启。电脑重启后先运行一次 ${HERDR_BIN}，bridge 才能操作会话。" \

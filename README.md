@@ -4,6 +4,8 @@
 
 herdr-cc-tg-bridge connects a Telegram group (with Topics enabled) to the Claude Code sessions running in Herdr on your computer. What you drive from your phone *is* the session on your desk: same memory, same `CLAUDE.md`, same hooks and skills. Back at the computer, keep typing in the same Herdr tab.
 
+**Several backends in one group:** `/new codex name` starts Codex, `/new claude name` starts Claude, and `/new <custom> name` starts any command you configure (for example a wrapper that points Claude Code at another API gateway). `/config` sets which one plain `/new` uses; `/switch <backend>` carries a topic's session over to another backend of the same kind. Existing Claude topics keep their behavior. Type `$tg-bind` in a live Herdr Codex session to attach it (the installer offers to set it up). See [Codex setup and scope](docs/PRD-v3-codex.md).
+
 It is a small Bun program with no runtime dependencies. The command it installs is called `tg-bridge`.
 
 *Independent project. Not affiliated with, or endorsed by, Anthropic. It runs the unmodified Claude Code CLI under your own account.*
@@ -185,7 +187,7 @@ Design notes, trade-offs and the record of decisions: [docs/PRD-v1.md](docs/PRD-
 
 - macOS (Linux should work but is untested; `bin/install-launchd` and `caffeinate` are macOS only)
 - [Bun](https://bun.sh) (tested with 1.3.14)
-- [Herdr](https://herdr.dev) ([source](https://github.com/herdrdev/herdr), tested with 0.8.0; the installer gets the latest, 0.9.x is untested), with its Claude integration: `herdr integration install claude`
+- [Herdr](https://herdr.dev) ([source](https://github.com/herdrdev/herdr), tested with 0.8.0 and 0.9.5), with its Claude integration (`herdr integration install claude`) and, for Codex, `herdr integration install codex`
 - [Claude Code](https://code.claude.com/docs)
 - `python3` (Herdr's Claude hook is a Python script) and `curl`
 
@@ -215,6 +217,8 @@ The installer does all of this for you. These are the same steps by hand, for Li
    | `HERDR_WORKSPACE` | no | Herdr workspace (id or label) for new sessions |
    | `TG_AUTOSEND_EXT` | no | Extensions sent back automatically; `md` and `txt` are off by default |
    | `TG_CLAUDE_ARGS` | no | Extra arguments for `claude` in new sessions |
+   | `TG_BACKENDS` | no | Custom backends, comma separated, e.g. `gw`. Each needs `TG_BACKEND_<NAME>_CMD` (the shell command that starts it); optional `_KIND` (`claude`, default, or `codex`) and `_BASE_URL` (a desktop session whose `ANTHROPIC_BASE_URL` equals it is recognised as this backend by `/tg-bind`) |
+   | `TG_DEFAULT_BACKEND` | no | Backend for `/new name` and topics created in the client until `/config` changes it: `claude` (default), `codex` or a custom one |
    | `TG_USAGE_FILE`, `TG_FABLE_USAGE_FILE` | no | JSON files with plan limits to display (format in `.env.example`) |
    | `TG_BRIDGE_LANG` | no | Language of the bot's messages: `en` (default) or `zh` |
    | `TG_BRIDGE_CAFFEINATE` | no | `0` lets the Mac idle-sleep while the bridge runs |
@@ -233,11 +237,16 @@ The installer does all of this for you. These are the same steps by hand, for Li
 
 6. **Optional: `/tg-bind` in Claude Code.** Create a skill (for example `~/.claude/skills/tg-bind/SKILL.md`) that runs `<repo>/bin/tg-bind` for `/tg-bind` and `<repo>/bin/tg-bind off` for `/tg-bind off`, and tells the session that its replies are now read on a phone. Running `bin/tg-bind` yourself in that pane does the same.
 
+   **In Codex**, which has no custom slash commands, the same skill is called as `$tg-bind`; `install.sh` offers to add it to `~/.codex/skills/tg-bind`. Codex runs the skill's command in its sandbox, which cannot reach the bridge on 127.0.0.1, so the first time it asks for approval; choose "don't ask again" and it remembers. If Codex never asks (`approval_policy = "never"`) and its sandbox has no network, either set `approval_policy = "on-request"` or allow the bridge's two commands in `~/.codex/rules/default.rules` (the installer offers this only in that case); a running Codex background server reads new rules after `codex app-server daemon restart`. Typing `!<repo>/bin/tg-bind` runs it yourself, outside the sandbox.
+
 ## Usage
 
 | Where | Send | Result |
 |---|---|---|
 | Anywhere | `/new name` | New topic + new session. Without a name, the topic is renamed after the session's title |
+| Anywhere | `/new backend name` | Same, on that backend (`claude`, `codex` or one from `TG_BACKENDS`). The topic icon colour shows the backend |
+| Anywhere | `/config` | Lists the backends; a button sets the default for `/new`. `/config default codex` does the same in text |
+| In a topic | `/switch backend` | Ends the session and resumes the same one on another backend of the same kind (e.g. `claude` ↔ a custom Claude command). Without a backend it shows buttons. Claude and Codex cannot continue each other's sessions |
 | Anywhere | `/sessions` | All sessions with state, context use and last activity, plus plan limits; one row of buttons each (close / resume / reopen, delete) |
 | Anywhere | `/status`, `/help` | Bridge status and plan limits, help |
 | In a topic | `/resend` | Send again the parts of the last answer that may not have arrived (😱) |

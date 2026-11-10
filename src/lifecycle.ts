@@ -6,17 +6,21 @@ import type { Config } from "./config";
 import * as H from "./herdr";
 import { log } from "./log";
 import { cut, esc, mdChunks } from "./render";
-import { findTranscript, Watcher } from "./session";
+import { Watcher } from "./session";
 import type { Binding, Store } from "./store";
 import type { Telegram } from "./telegram";
-import { parseLine } from "./transcript";
+import { codexSessionMeta, findTranscript, transcriptParser } from "./transcript";
+import { agentKind, codexInstructions, codexSessionName, launchArgs, panesShowing, type AgentKind } from "./providers";
 import { parseCtx } from "./usage";
 import { tr } from "./i18n";
+import { backendName, detectBackend, type Backend } from "./backends";
 
-const SPAWN_PROMPT = (tgSend: string) =>
-  `This Claude Code session is being driven from a Telegram forum topic through tg-bridge; the user reads your replies on a phone. ` +
-  `Files you create with the Write tool in common deliverable formats are sent to the user automatically at the end of the turn. ` +
-  `For anything else the user should receive (files produced by scripts or commands, screenshots, existing files), run: ${tgSend} <path> [<path> ...]. ` +
+const SPAWN_PROMPT = (kind: AgentKind, tgSend: string) =>
+  `This ${kind === "codex" ? "Codex" : "Claude Code"} session is being driven from a Telegram forum topic through tg-bridge; the user reads your replies on a phone. ` +
+  (kind === "claude" ? `Files you create with the Write tool in common deliverable formats are sent to the user automatically at the end of the turn. ` +
+  `For anything else the user should receive (files produced by scripts or commands, screenshots, existing files), run: ${tgSend} <path> [<path> ...]. `
+  : `To send the user a file (anything you produced, screenshots, existing files), run: ${tgSend} <path> [<path> ...]. ` +
+    `It posts to the bridge on 127.0.0.1, so a sandbox without network makes it fail (curl exit code 7); then run it again with escalated permissions. `) +
   `Attachments the user sends arrive as local file paths in the message.`;
 
 export const ago = (t: number | undefined, now = Date.now()) => {
@@ -29,16 +33,22 @@ export const ago = (t: number | undefined, now = Date.now()) => {
 export const cleanTitle = (t?: string) => (t ?? "").replace(/^[^\p{L}\p{N}]+/u, "").trim();
 
 // Last finished exchange in a transcript: the last real user prompt and the reply that closed its turn.
-export function lastExchange(text: string): { ask?: string; answer?: string; title?: string } {
+export function lastExchange(text: string, kind: AgentKind = "claude"): { ask?: string; answer?: string; title?: string } {
   let ask: string | undefined, answer: string | undefined, title: string | undefined;
   let pendingAsk: string | undefined, texts: string[] = [];
+  const parse = transcriptParser(kind);
   for (const line of text.split("\n")) {
-    for (const ev of parseLine(line)) {
+    for (const ev of parse(line)) {
       if (ev.kind === "title") title = ev.title;
       else if (ev.kind === "user" && !ev.text.startsWith("<")) { pendingAsk = ev.text; texts = []; }
       else if (ev.kind === "text") texts.push(ev.text);
       else if (ev.kind === "tool") texts = [];
-      else if (ev.kind === "end") { ask = pendingAsk ?? ask; answer = texts.join("\n\n").trim() || answer; texts = []; }
+      else if (ev.kind === "end") {
+        // an interrupted turn has no answer: keep the exchange before it rather than pair its ask with an old answer
+        const final = ev.aborted ? "" : texts.join("\n\n").trim();
+        if (final) { ask = pendingAsk ?? ask; answer = final; }
+        texts = [];
+      }
     }
   }
   return { ask, answer, title };
@@ -61,6 +71,29 @@ export class Lifecycle {
 
   name(thread: number, b?: Binding) { return b?.title ?? b?.name ?? `tg-${thread}`; }
 
+  backend(name?: string): Backend | undefined { return this.cfg.backends.find(b => b.name === name); }
+
+  // what /new and topics made in the client start: set with /config (state.json), else from .env
+  defaultBackend(): string {
+    const saved = this.store.state.defaultBackend;
+    if (saved && this.backend(saved)) return saved;
+    if (saved) log("default backend", saved, "is no longer configured; using", this.cfg.defaultBackend);
+    return this.cfg.defaultBackend;
+  }
+
+  setDefaultBackend(name: string): boolean {
+    if (!this.backend(name)) return false;
+    this.store.state.defaultBackend = name;
+    this.store.save();
+    return true;
+  }
+
+  // the backend a binding resumes with; one removed from .env since falls back to the built-in of its kind
+  private backendOf(b?: Binding): Backend {
+    const name = b ? backendName(b) : this.defaultBackend();
+    return this.backend(name) ?? this.backend(b?.kind === "codex" ? "codex" : "claude")!;
+  }
+
   watch(thread: number) {
     const b = this.store.state.topics[thread];
     if (b && !b.closedAt && !this.watchers.has(thread)) this.watchers.set(thread, new Watcher(thread, b, this.cfg, this.tg, this.store));
@@ -71,7 +104,7 @@ export class Lifecycle {
     this.watchers.delete(thread);
   }
 
-  canResume(b?: Binding) { return !!b?.session && existsSync(findTranscript(b.cwd, b.session)); }
+  canResume(b?: Binding) { return !!b?.session && existsSync(findTranscript(b.cwd, b.session, b.kind)); }
 
   // "Herdr TELEGRAM / 周报草稿": where the session lives, in words the user recognises
   private async where(workspace?: string, tab?: string) {
@@ -81,7 +114,7 @@ export class Lifecycle {
 
   // Make the topic's session live. Resumes the bound session (claude --resume) unless `fresh`; reuses a pane that
   // is left with a shell; reopens the topic if it was closed. Returns false when no session could be started.
-  async open(thread: number, opts: { name?: string; autoName?: boolean; fresh?: boolean } = {}): Promise<boolean> {
+  async open(thread: number, opts: { name?: string; autoName?: boolean; fresh?: boolean; backend?: string } = {}): Promise<boolean> {
     const old = this.store.state.topics[thread];
     // a closed desktop session is normally still running, so look at the pane even when the binding is closed
     const st = old ? await H.paneState(old.pane, old.terminal) : undefined;
@@ -98,19 +131,19 @@ export class Lifecycle {
     }
     if (st?.state === "live" && !old!.attached) await H.paneClose(old!.pane);
 
-    const resume = !opts.fresh && this.canResume(old);
+    const be = opts.backend ? this.backend(opts.backend) ?? this.backendOf(old) : this.backendOf(old);
+    // a session id is only resumable by a backend of the same kind
+    const resume = !opts.fresh && this.canResume(old) && be.kind === (old!.kind ?? "claude");
     const label = cut(this.name(thread, old ?? { name: opts.name } as Binding), 40);
     const ws = await H.resolveWorkspace(this.cfg.workspace);
-    const s = await H.spawnClaude({
-      workspace: ws,
-      cwd: resume ? old!.cwd : this.cfg.workdir, label, agent: `tg-${thread}`,
-      pane: st?.state === "exited" && !old!.attached ? old!.pane : undefined,
-      args: [...(resume ? ["--resume", old!.session!] : []), "--append-system-prompt", SPAWN_PROMPT(this.tgSendPath), ...this.cfg.claudeArgs],
-    });
-    if (!s) { await this.tg.notice(thread, tr("❌ 开会话失败，Herdr 没有返回窗格", "❌ Could not open a session: Herdr returned no pane")); return false; }
+    const s = await this.spawn(be, { workspace: ws, cwd: resume ? old!.cwd : this.cfg.workdir, label, thread,
+      pane: st?.state === "exited" && !old!.attached ? old!.pane : undefined, session: resume ? old!.session : undefined });
+    if (!s) { await this.tg.notice(thread, tr(`❌ 开会话失败：${esc(be.name)} 没有在 Herdr 里起来`, `❌ Could not open a session: ${esc(be.name)} did not start in Herdr`)); return false; }
+    const kind = be.kind;
     this.unwatch(thread);
     this.store.state.topics[thread] = {
       ...(old ?? { cwd: this.cfg.workdir, name: opts.name, autoName: opts.autoName ?? false }),
+      kind, backend: be.name,
       pane: s.pane, tab: s.tab, terminal: s.terminal,
       session: s.session ?? (resume ? old!.session : undefined),
       cwd: resume ? old!.cwd : this.cfg.workdir,
@@ -119,40 +152,155 @@ export class Lifecycle {
     this.store.save();
     this.watch(thread);
     log("open", thread, { resume, pane: s.pane, reusedPane: st?.state === "exited" });
-    await this.tg.notice(thread, `${resume ? tr("🔄 已接回原会话", "🔄 Resumed the session") : tr("🟢 新会话已就绪", "🟢 New session ready")} · ${await this.where(ws, label)}`);
+    await this.tg.notice(thread, `${resume ? tr("🔄 已接回原会话", "🔄 Resumed the session") : tr("🟢 新会话已就绪", "🟢 New session ready")} · ${esc(be.name)} · ${await this.where(ws, label)}`);
     return true;
   }
 
+  private async spawn(be: Backend, o: { workspace?: string; cwd: string; label: string; thread: number; pane?: string; session?: string }) {
+    const extra = be.kind === "codex" ? this.cfg.codexArgs : this.cfg.claudeArgs;
+    return H.spawnAgent({
+      kind: be.kind, cmd: be.cmd, workspace: o.workspace, cwd: o.cwd, label: o.label, agent: `tg-${o.thread}`, pane: o.pane,
+      args: launchArgs(be.kind, o.session, extra, SPAWN_PROMPT(be.kind, this.tgSendPath),
+        be.kind === "codex" ? await codexInstructions(extra, o.cwd) : undefined),
+    });
+  }
+
+  // /switch: carry on with the same session on another backend of the same kind (claude <-> gw). A running session
+  // is ended with /exit and started again in the same pane, so the tab stays where it is, desktop sessions included.
+  async switchTo(thread: number, name: string): Promise<void> {
+    const b = this.store.state.topics[thread];
+    const to = this.backend(name);
+    if (!b) { await this.tg.notice(thread, tr("这个话题还没有会话。发条消息就会用默认后端开一个", "This topic has no session yet; write here to start one on the default backend")); return; }
+    if (!to) { await this.tg.notice(thread, tr(`没有叫 ${esc(name)} 的后端。可用：${this.names()}`, `No backend named ${esc(name)}. Available: ${this.names()}`)); return; }
+    const from = this.backendOf(b);
+    if (from.name === to.name) { await this.tg.notice(thread, tr(`已经是 ${esc(to.name)}`, `Already on ${esc(to.name)}`)); return; }
+    if (from.kind !== to.kind) {
+      await this.tg.notice(thread, tr(`${esc(from.name)} 和 ${esc(to.name)} 的会话记录格式不同，没法接着同一个会话。要用 ${esc(to.name)} 就发 <code>/new ${esc(to.name)} 名字</code> 另开`,
+        `${esc(from.name)} and ${esc(to.name)} keep sessions in different formats, so one cannot continue the other's. Send <code>/new ${esc(to.name)} name</code> for a new one`));
+      return;
+    }
+    const st = b.closedAt ? undefined : await H.paneState(b.pane, b.terminal);
+    if (st?.state === "unknown") { await this.tg.notice(thread, tr("⚠️ Herdr 连不上，没法切换", "⚠️ Cannot reach Herdr, so nothing was switched")); return; }
+    if (st?.state === "live" && st.agent!.agent_status !== "idle" && st.agent!.agent_status !== "done") {
+      await this.tg.notice(thread, tr("会话正在回复或在等你选择，等这一轮结束或先发 /stop 再切", "The session is busy or waiting for you; switch once this turn ends, or send /stop first"));
+      return;
+    }
+    const resumable = this.canResume(b);
+    if (st?.state !== "live") {
+      // nothing running here: resume on the new backend now, or start with it on the next message
+      b.backend = to.name;
+      this.store.save();
+      log("switch", thread, { from: from.name, to: to.name, running: false });
+      if (resumable) { await this.open(thread); return; }
+      await this.tg.notice(thread, tr(`🔀 已改为 ${esc(to.name)}，下一条消息会用它开新会话`, `🔀 Now on ${esc(to.name)}; the next message starts a session with it`));
+      return;
+    }
+    this.unwatch(thread);
+    await H.prompt(b.pane, "/exit");
+    let left = false;
+    for (let i = 0; i < 40 && !left; i++) { await Bun.sleep(500); left = (await H.paneState(b.pane, b.terminal)).state === "exited"; }
+    if (!left) {
+      this.watch(thread);
+      await this.tg.notice(thread, tr(`❌ 会话没有退出，还在用 ${esc(from.name)}。用 /screen 看看屏幕`, `❌ The session did not exit and stays on ${esc(from.name)}. /screen shows its screen`));
+      return;
+    }
+    const s = await this.spawn(to, { cwd: b.cwd, label: this.name(thread, b), thread, pane: b.pane, session: resumable ? b.session : undefined });
+    if (!s) {
+      // the pane is left with a shell; the binding keeps the old backend, so the next message brings it back
+      this.watch(thread);
+      await this.tg.notice(thread, tr(`❌ ${esc(to.name)} 没有起来，原会话已退出。再发消息会用 ${esc(from.name)} 接回`, `❌ ${esc(to.name)} did not start and the session has exited. The next message resumes it on ${esc(from.name)}`));
+      return;
+    }
+    Object.assign(b, { backend: to.name, pane: s.pane, tab: s.tab ?? b.tab, terminal: s.terminal, session: s.session ?? b.session, notified: undefined, lastActive: Date.now() });
+    this.store.save();
+    this.watch(thread);
+    log("switch", thread, { from: from.name, to: to.name, pane: s.pane });
+    await this.tg.notice(thread, resumable ? tr(`🔀 已切到 ${esc(to.name)}，接着原会话`, `🔀 Switched to ${esc(to.name)}, same session`)
+      : tr(`🔀 已切到 ${esc(to.name)}。原会话还没有记录可接，开的是新会话`, `🔀 Switched to ${esc(to.name)}. The old session had no transcript yet, so this is a new one`));
+  }
+
+  names() { return this.cfg.backends.map(b => b.name).join(", "); }
+
+  // /config: the default backend, one button per backend
+  configView(): { html: string; keyboard: any[][] } {
+    const cur = this.defaultBackend();
+    const lines = this.cfg.backends.map(b => `${b.name === cur ? "✅" : "▫️"} <code>${esc(b.name)}</code>${b.cmd ? ` · <code>${esc(cut(b.cmd, 40))}</code>` : ""}`);
+    return {
+      html: [tr(`<b>默认后端：${esc(cur)}</b>`, `<b>Default backend: ${esc(cur)}</b>`),
+        tr("<code>/new 名字</code> 和客户端里新建的话题用它。<code>/new 后端 名字</code> 单独指定", "Used by <code>/new name</code> and topics created in the client. <code>/new backend name</code> picks one per topic"),
+        ...lines].join("\n"),
+      keyboard: [this.cfg.backends.map(b => ({ text: `${b.name === cur ? "✅ " : ""}${b.name}`, callback_data: `cf:default:${b.name}` }))],
+    };
+  }
+
+  // /switch with no argument: the backends this topic can move to
+  switchView(thread: number): { html: string; keyboard: any[][] } {
+    const b = this.store.state.topics[thread];
+    const from = this.backendOf(b);
+    const to = this.cfg.backends.filter(x => x.kind === from.kind && x.name !== from.name);
+    return {
+      html: to.length ? tr(`本话题用的是 <b>${esc(from.name)}</b>，换成：`, `This topic runs on <b>${esc(from.name)}</b>. Switch to:`)
+        : tr(`本话题用的是 <b>${esc(from.name)}</b>，没有同类后端可以换`, `This topic runs on <b>${esc(from.name)}</b>; no other backend of its kind is configured`),
+      keyboard: to.length ? [to.map(x => ({ text: x.name, callback_data: `sw:${x.name}:${thread}` }))] : [],
+    };
+  }
+
   // /tg-bind from inside a desktop session: new topic, handoff card, last answer, then live sync.
-  async attach(pane: string): Promise<{ ok: boolean; thread?: number; error?: string; already?: boolean }> {
-    const bound = this.store.topicOfPane(pane);
-    if (bound) return { ok: true, thread: bound, already: true };
+  // `session` is the caller's own session id when it knows it (Codex), so a wrong HERDR_PANE_ID cannot bind a neighbour.
+  // One at a time: two calls for the same session (a retry, a double press) must not open two topics.
+  attach(pane: string, session?: string, baseUrl?: string): Promise<{ ok: boolean; thread?: number; error?: string; already?: boolean }> {
+    const run = this.attaching.then(() => this.attachOne(pane, session, baseUrl));
+    this.attaching = run.catch(() => {});
+    return run;
+  }
+  private attaching: Promise<unknown> = Promise.resolve();
+
+  private async attachOne(pane: string, session?: string, baseUrl?: string): Promise<{ ok: boolean; thread?: number; error?: string; already?: boolean }> {
+    if (session) {
+      const bound = this.store.topicOfSession(session);
+      if (bound) return { ok: true, thread: bound, already: true };
+    }
+    const shared = session ? await this.paneOfShared(session) : undefined;
+    if (shared && "error" in shared) return { ok: false, error: shared.error };
+    if (shared) pane = shared.pane;
     const st = await H.paneState(pane);
-    // bound before and then closed in Telegram: reopen that topic rather than open a second one for the same pane
-    const closed = Object.entries(this.store.state.topics).find(([, b]) => b.pane === pane && b.closedAt && b.terminal === st.terminal);
+    // a binding counts only for the terminal it was made in: Herdr reuses pane ids
+    const mine = (b: Binding) => b.pane === pane && b.terminal === st.terminal;
+    const open = Object.entries(this.store.state.topics).find(([, b]) => mine(b) && !b.closedAt);
+    if (open && session) return { ok: false, error: "this pane is bound to another session; not bound" };
+    if (open && st.state === "live") return { ok: true, thread: Number(open[0]), already: true };
+    // bound before and then closed in Telegram: reopen that topic rather than open a second one for the same session.
+    // For a Codex caller the pane must be running that session: by its title when shared, else as Herdr reports it.
+    const running = !session || shared || st.agent?.agent_session?.value === session;
+    const closed = Object.entries(this.store.state.topics).find(([, b]) => mine(b) && b.closedAt && (!session || (b.session === session && running)));
     if (closed && st.state === "live") {
       const ok = await this.open(Number(closed[0]));
       return ok ? { ok, thread: Number(closed[0]) } : { ok, error: "could not reopen the earlier topic" };
     }
     if (st.state === "unknown") return { ok: false, error: "Herdr is not answering" };
-    if (st.state !== "live") return { ok: false, error: "no Claude session is running in this pane" };
+    if (st.state !== "live") return { ok: false, error: "no Claude or Codex session is running in this pane" };
     const a = st.agent!;
-    const session = a.agent_session?.value;
-    if (!session) return { ok: false, error: "Herdr has no session id for this pane: the session was started before `herdr integration install claude`, so its transcript cannot be found" };
-    const path = findTranscript(a.cwd, session);
-    const ex = existsSync(path) ? lastExchange(readFileSync(path, "utf8")) : {};
-    const title = cut(ex.title || cleanTitle(a.terminal_title_stripped) || tr("电脑会话", "Desktop session"), 120);
-    const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, name: title });
+    const kind = a.agent === undefined ? "claude" : agentKind(a.agent); // a Herdr that does not report the kind ran Claude only
+    if (!kind) return { ok: false, error: `${a.agent} sessions are not supported; only Claude and Codex` };
+    const sid = shared ? session : a.agent_session?.value; // Herdr credits a shared session to another pane
+    if (!sid) return { ok: false, error: `Herdr has no session id for this pane: the session was started before \`herdr integration install ${kind}\`, so its transcript cannot be found` };
+    if (session && session !== sid) return { ok: false, error: "this pane runs another session; not bound" };
+    const path = findTranscript(a.cwd, sid, kind);
+    const ex = existsSync(path) ? lastExchange(readFileSync(path, "utf8"), kind) : {};
+    const tabTitle = H.usefulLabel(await H.tabLabel(a.workspace_id, a.tab_id));
+    const backend = detectBackend(this.cfg.backends, kind, baseUrl);
+    const title = cut(tabTitle || ex.title || cleanTitle(a.terminal_title_stripped) || tr("电脑会话", "Desktop session"), 120);
+    const j = await this.tg.call("createForumTopic", { chat_id: this.cfg.chatId, name: title, icon_color: this.backend(backend)!.color });
     if (!j.ok) return { ok: false, error: `createForumTopic failed: ${j.description}` };
     const thread: number = j.result.message_thread_id;
     this.store.state.topics[thread] = {
-      pane, tab: a.tab_id, terminal: a.terminal_id, session, cwd: a.cwd,
+      pane, kind, backend, tab: a.tab_id, terminal: a.terminal_id, session: sid, cwd: a.cwd,
       name: title, title, autoName: true, attached: true, lastActive: Date.now(),
     };
     this.store.save();
     const ctx = parseCtx(a.tokens?.context);
     const card = [
-      `🔗 <b>${tr("已从电脑接过来", "Taken over from the computer")}</b> · ${await this.where(a.workspace_id, cleanTitle(a.terminal_title_stripped))}`,
+      `🔗 <b>${tr("已从电脑接过来", "Taken over from the computer")}</b> · ${esc(backend)} · ${await this.where(a.workspace_id, tabTitle || cleanTitle(a.terminal_title_stripped))}`,
       `${tr("目录", "Folder")} <code>${esc(a.cwd.replace(homedir(), "~"))}</code>${ctx ? ` · ctx ${esc(ctx.text)}` : ""}`,
       ex.ask ? tr(`上一轮你问的是「${esc(cut(ex.ask.replace(/\s+/g, " "), 300))}」，回答在下面`, `Last time you asked "${esc(cut(ex.ask.replace(/\s+/g, " "), 300))}"; the answer is below`) : "",
       tr("在这里发消息，就是在电脑上那个会话里发。关闭或删除这个话题只断开 Telegram，电脑上的会话继续开着", "Messages here go to that session on the computer. Closing or deleting this topic only disconnects Telegram; the session keeps running"),
@@ -160,7 +308,7 @@ export class Lifecycle {
     await this.tg.notice(thread, card);
     if (ex.answer) for (const c of mdChunks(ex.answer)) await this.tg.send(thread, c);
     this.watch(thread);
-    log("attach", thread, { pane, session });
+    log("attach", thread, { pane, kind, backend, session: sid });
     return { ok: true, thread };
   }
 
@@ -203,7 +351,20 @@ export class Lifecycle {
     b.title = name;
     b.autoName = false; // a name the user picked is never overwritten by the session title
     this.store.save();
-    if (b.tab && !b.closedAt && !b.attached) await H.tabRename(b.tab, name);
+    if (b.tab && !b.closedAt) await H.tabRename(b.tab, name); // desktop topics follow their tab label, so it changes with them
+  }
+
+  // Codex's shared app-server gives its sessions the first pane's HERDR_PANE_ID, and Herdr credits them to that pane,
+  // so such a session is placed by its name, which Codex shows in its own pane's title. Undefined: not shared.
+  private async paneOfShared(session: string): Promise<{ pane: string } | { error: string } | undefined> {
+    const path = findTranscript("", session, "codex");
+    const meta = path ? codexSessionMeta(path) : undefined;
+    if (!meta?.shared) return;
+    const name = codexSessionName(session);
+    if (!name) return { error: "Codex has not named this session yet; send it a message, then bind again" };
+    const hits = panesShowing(await H.agentList(), meta.cwd!, name);
+    if (hits.length === 1) return { pane: hits[0] };
+    return { error: hits.length ? `several Herdr panes show "${name}"; give this session a unique name with /rename, then bind again` : `no Herdr pane shows "${name}" in its title` };
   }
 
   // A send failed with "message thread not found": the topic was probably deleted. Confirm before acting.
@@ -247,7 +408,7 @@ export class Lifecycle {
       const ctx = parseCtx(st?.agent?.tokens?.context);
       const name = this.name(thread, b);
       const when = ago(state === "closed" ? b.closedAt : b.lastActive);
-      const bits = [STATE_LABEL()[state] ?? state, `<a href="${this.link(thread)}">${esc(cut(name, 40))}</a>`, b.attached ? tr("电脑会话", "desktop") : "", ctx ? `ctx ${esc(ctx.text)}` : "", when];
+      const bits = [STATE_LABEL()[state] ?? state, `<a href="${this.link(thread)}">${esc(cut(name, 40))}</a>`, esc(backendName(b)), b.attached ? tr("电脑会话", "desktop") : "", ctx ? `ctx ${esc(ctx.text)}` : "", when];
       lines.push(bits.filter(Boolean).join(" · "));
       const short = cut(name, 12);
       const del = { text: tr(`删除 ${short}`, `Delete ${short}`), callback_data: `lc:delask:${thread}` };

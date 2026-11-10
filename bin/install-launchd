@@ -25,7 +25,8 @@ fi
 
 BUN="$(command -v bun)" || { echo "bun not found in PATH" >&2; exit 1; }
 HERDR="$(command -v herdr)" || { echo "herdr not found in PATH" >&2; exit 1; }
-PATH_VALUE="$(dirname "$BUN"):$(dirname "$HERDR"):/usr/bin:/bin:/usr/sbin:/sbin"
+CODEX="$(command -v codex || true)" # optional: the bridge asks it for the user's developer_instructions
+PATH_VALUE="$(dirname "$BUN"):$(dirname "$HERDR")${CODEX:+:$(dirname "$CODEX")}:/usr/bin:/bin:/usr/sbin:/sbin"
 SOCKET="${HERDR_SOCKET_PATH:-}"
 CMD="cd '$ROOT' && exec ${TG_BRIDGE_LAUNCH_PREFIX:-} bin/tg-bridge"
 mkdir -p "$STATE_DIR" "$(dirname "$PLIST")"
