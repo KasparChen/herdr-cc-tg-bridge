@@ -6,12 +6,14 @@ import { Store } from "../src/store";
 import { loadConfig } from "../src/config";
 
 let state: any, started: any[], closed: string[], label: string | undefined;
+let ensured: any = { id: "workspace" };
 let renamedTabs: string[] = [], keyboards: any[] = [], agents: any[] = [], failSpawn = false, prompts: string[] = [];
 mock.module("../src/herdr", () => ({
   paneState: async () => (typeof state === "function" ? state() : state),
   prompt: async (_: string, text: string) => { prompts.push(text); return { result: {} }; },
   spawnAgent: async (opts: any) => { started.push(opts); return failSpawn ? undefined : { pane: "new-pane", tab: "new-tab", terminal: "new-terminal", session: "test-session" }; },
   resolveWorkspace: async () => "workspace",
+  ensureWorkspace: async () => ensured,
   workspaces: async () => [{ workspace_id: "workspace", label: "Telegram" }],
   paneClose: async (pane: string) => { closed.push(pane); },
   tabRename: async (_: string, name: string) => { renamedTabs.push(name); return {}; },
@@ -40,7 +42,7 @@ case "$*" in *tg-bridge-marker*) echo '[{"type":"message","role":"developer","co
   cfg = loadConfig({ TELEGRAM_BOT_TOKEN: "fake", TG_CHAT_ID: "-1", TG_ALLOWED_USERS: "1", TG_BRIDGE_WORKDIR: dir, TG_BRIDGE_STATE_DIR: join(dir, "state") });
   store = new Store(cfg.stateDir); watchers = new Map(); notices = []; sends = []; calls = []; started = []; closed = [];
   state = { state: "gone" };
-  label = undefined; renamedTabs = []; keyboards = []; agents = []; failSpawn = false; prompts = [];
+  ensured = { id: "workspace" }; label = undefined; renamedTabs = []; keyboards = []; agents = []; failSpawn = false; prompts = [];
   tg = {
     chatId: -1,
     call: async (name: string, body: any) => { calls.push({ name, body }); return { ok: true, result: { message_thread_id: 41 } }; },
@@ -348,6 +350,21 @@ describe("mixed provider lifecycle (offline)", () => {
   });
 });
 
+describe("workspace (offline)", () => {
+  test("a recreated workspace's root pane takes the first session, and its tab the topic's name", async () => {
+    ensured = { id: "wN", pane: "wN:p1", tab: "wN:t1" };
+    expect(await life.open(41, { fresh: true, name: "周报" })).toBe(true);
+    expect(started[0]).toMatchObject({ workspace: "wN", pane: "wN:p1" });
+    expect(renamedTabs).toEqual(["周报"]);
+    expect(notices.at(-1)).toContain("周报");
+  });
+  test("when the session does not start there, the new empty workspace is closed again", async () => {
+    ensured = { id: "wN", pane: "wN:p1", tab: "wN:t1" }; failSpawn = true;
+    expect(await life.open(41, { fresh: true, name: "x" })).toBe(false);
+    expect(closed).toEqual(["wN:p1"]);
+  });
+});
+
 describe("backends: /new, /config, /switch, tg-bind (offline)", () => {
   let oldUserHome: string | undefined, router: any;
   const claudeLive = (status = "idle") => ({ state: "live", terminal: "terminal", agent: { agent: "claude", agent_status: status, agent_session: { value: "claude-session" }, cwd: dir, workspace_id: "workspace", tab_id: "tab", terminal_id: "terminal" } });
@@ -390,8 +407,9 @@ describe("backends: /new, /config, /switch, tg-bind (offline)", () => {
   });
   test("/config: buttons set the default, it survives a restart, and a backend removed from .env falls back", async () => {
     await msg("/config");
-    expect(sends.at(-1)).toContain("gw"); expect(keyboards.at(-1)[0].map((b: any) => b.callback_data)).toEqual(["cf:default:claude", "cf:default:codex", "cf:default:gw"]);
+    expect(sends.at(-1)).toContain("gw"); expect(keyboards.at(-1).flat().map((b: any) => b.callback_data)).toEqual(["pn:def", "pn:list", "pn:home", "pn:fold"]);
     const edits: string[] = []; tg.edit = async (_: number, html: string) => { edits.push(html); return true; };
+    // a button from a /config message sent before the panel still works
     await router.onCallback({ id: "sim", from: { id: 1 }, data: "cf:default:codex", message: { message_id: 9 } });
     expect(edits.at(-1)).toContain("codex");
     expect(new Store(cfg.stateDir).state.defaultBackend).toBe("codex");
@@ -400,6 +418,37 @@ describe("backends: /new, /config, /switch, tg-bind (offline)", () => {
     await msg("/config default GW"); expect(store.state.defaultBackend).toBe("gw");
     store.state.defaultBackend = "gone";
     expect(life.defaultBackend()).toBe("gw");
+  });
+  test("/config panel: pages open in the same message, switch the default, go back and collapse; the key shows only its end", async () => {
+    const oldLang = process.env.TG_BRIDGE_LANG; process.env.TG_BRIDGE_LANG = "zh";
+    try {
+    writeFileSync(join(dir, "key"), "sk-test-0123456789abcd\n");
+    cfg = loadConfig({ TELEGRAM_BOT_TOKEN: "fake", TG_CHAT_ID: "-1", TG_ALLOWED_USERS: "1", TG_BRIDGE_WORKDIR: dir, TG_BRIDGE_STATE_DIR: join(dir, "state"),
+      TG_BACKENDS: "gw", TG_BACKEND_GW_CMD: "claude-gw", TG_BACKEND_GW_BASE_URL: "https://gw.example", TG_BACKEND_GW_KEY_FILE: join(dir, "key"), TG_DEFAULT_BACKEND: "gw" });
+    life = new Lifecycle(cfg, tg, store, watchers, "/bridge/tg-send");
+    const { Router } = await import("../src/router");
+    router = new Router(cfg, tg, store, watchers, {} as any, life);
+    const edits: { html: string; kb: any[][] }[] = [];
+    tg.edit = async (_: number, html: string, extra: any) => { edits.push({ html, kb: extra.reply_markup.inline_keyboard }); return true; };
+    const press = (data: string) => router.onCallback({ id: "sim", from: { id: 1 }, data, message: { message_id: 9 } });
+    const datas = () => edits.at(-1)!.kb.flat().map((b: any) => b.callback_data);
+    await msg("/config");
+    expect(sends.at(-1)).toContain("默认端点");
+    await press("pn:def");
+    expect(edits.at(-1)!.html).toContain("https://gw.example"); expect(edits.at(-1)!.html).toContain("••••abcd");
+    expect(edits.at(-1)!.html).not.toContain("0123456789");
+    expect(datas()).toEqual(["pn:set:claude:def", "pn:set:codex:def", "pn:home"]);
+    await press("pn:set:codex:def");
+    expect(store.state.defaultBackend).toBe("codex"); expect(edits.at(-1)!.html).toContain("已切换为 <b>codex</b>");
+    expect(datas()).toContain("pn:set:gw:def");
+    await press("pn:home"); expect(edits.at(-1)!.html).toContain("默认端点：<b>codex</b>");
+    await press("pn:list"); expect(datas()).toEqual(["pn:be:claude", "pn:be:codex", "pn:be:gw", "pn:home"]);
+    await press("pn:be:gw"); expect(datas()).toEqual(["pn:set:gw:be", "pn:list"]);
+    await press("pn:set:gw:be"); expect(store.state.defaultBackend).toBe("gw"); expect(datas()).toEqual(["pn:list"]);
+    await press("pn:be:claude"); expect(edits.at(-1)!.html).toContain("不用 key");
+    await press("pn:fold"); expect(edits.at(-1)!.html).toContain("已收起"); expect(datas()).toEqual(["pn:home"]);
+    rmSync(join(dir, "key")); await press("pn:be:gw"); expect(edits.at(-1)!.html).toContain("读不到");
+    } finally { if (oldLang === undefined) delete process.env.TG_BRIDGE_LANG; else process.env.TG_BRIDGE_LANG = oldLang; }
   });
   test("tg-bind tells an gw desktop session from plain Claude by ANTHROPIC_BASE_URL", async () => {
     state = claudeLive();

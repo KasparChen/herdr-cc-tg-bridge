@@ -12,11 +12,12 @@ import { MAX_DOWNLOAD, REACT, type Telegram } from "./telegram";
 import { limitsLine } from "./usage";
 import { locale, tr, zh } from "./i18n";
 import { newSpec } from "./backends";
+import { Panel } from "./panel";
 
 const HELP = () => (zh() ? [
   "<b>tg-bridge 用法</b>",
   "• <code>/new 名字</code>：新建话题和会话。也可以在客户端里手动建话题",
-  "• <code>/new 后端 名字</code>：指定后端新建，比如 <code>/new codex 名字</code>。<code>/config</code> 看全部后端、改默认后端",
+  "• <code>/new 后端 名字</code>：指定后端新建，比如 <code>/new codex 名字</code>。<code>/config</code> 打开控制面板：看状态、看各端点、切默认端点",
   "• <code>/switch 后端</code>：本话题换后端接着原会话（同类后端之间，比如 claude 和自定义的 Claude 命令）",
   "• 电脑上已经在聊的会话，在那个会话里用 <code>/tg-bind</code> 接到这里",
   "• 在话题里发文字、图片、文件：送进对应会话",
@@ -29,7 +30,7 @@ const HELP = () => (zh() ? [
 ] : [
   "<b>How to use tg-bridge</b>",
   "• <code>/new name</code>: new topic and session. Creating a topic in the client works too",
-  "• <code>/new backend name</code>: pick the backend, e.g. <code>/new codex name</code>. <code>/config</code> lists backends and sets the default",
+  "• <code>/new backend name</code>: pick the backend, e.g. <code>/new codex name</code>. <code>/config</code> opens the control panel: state, backends, default backend",
   "• <code>/switch backend</code>: carry on this topic's session on another backend of the same kind (e.g. claude and a custom Claude command)",
   "• A session already running on the computer: run <code>/tg-bind</code> in it to bring it here",
   "• Text, photos and files sent in a topic go to its session",
@@ -43,11 +44,11 @@ const HELP = () => (zh() ? [
 
 // Shown in the client's "/" menu for this group.
 export const COMMANDS = () => (zh() ? [
-  ["new", "新建话题和会话"], ["config", "看后端、改默认后端"], ["switch", "本话题换后端接着聊"], ["sessions", "列出全部会话"], ["close", "结束本话题的会话并关闭话题"],
+  ["new", "新建话题和会话"], ["config", "控制面板：状态、端点、默认端点"], ["switch", "本话题换后端接着聊"], ["sessions", "列出全部会话"], ["close", "结束本话题的会话并关闭话题"],
   ["delete", "结束会话并删除本话题"], ["stop", "打断当前回复"], ["screen", "看会话屏幕"], ["keys", "往会话发按键"],
   ["resend", "补发上一轮没确认发出的回答"], ["status", "看 bridge 状态和额度"], ["help", "用法"],
 ] : [
-  ["new", "New topic and session"], ["config", "Backends and the default one"], ["switch", "Move this topic to another backend"], ["sessions", "List all sessions"], ["close", "End this topic's session and close the topic"],
+  ["new", "New topic and session"], ["config", "Control panel: state, backends, default"], ["switch", "Move this topic to another backend"], ["sessions", "List all sessions"], ["close", "End this topic's session and close the topic"],
   ["delete", "End the session and delete this topic"], ["stop", "Interrupt the current reply"], ["screen", "Show the session's screen"], ["keys", "Send key presses to the session"],
   ["resend", "Send again what may not have arrived"], ["status", "Bridge status and limits"], ["help", "How to use"],
 ]).map(([command, description]) => ({ command, description }));
@@ -57,11 +58,12 @@ const HINT_EVERY_MS = 10 * 60_000;
 
 export class Router {
   private lastHint = 0;
+  private panel: Panel;
 
   constructor(
     private cfg: Config, private tg: Telegram, private store: Store,
     private watchers: Map<number, Watcher>, private status: Status, private life: Lifecycle,
-  ) {}
+  ) { this.panel = new Panel(cfg, store, life, status); }
 
   async onUpdate(u: any) {
     if (u.message) await this.onMessage(u.message).catch(e => log("message", e));
@@ -107,7 +109,7 @@ export class Router {
         if (!ok) { await this.tg.notice(thread, tr(`没有叫 ${esc(rest[1])} 的后端。可用：${this.life.names()}`, `No backend named ${esc(rest[1])}. Available: ${this.life.names()}`)); return; }
         log("default backend", rest[1].toLowerCase());
       }
-      const { html, keyboard } = this.life.configView();
+      const { html, keyboard } = this.panel.view(rest[0] ? "def" : "home");
       await this.tg.send(thread, html, { reply_markup: { inline_keyboard: keyboard } });
       return;
     }
@@ -206,9 +208,11 @@ export class Router {
     const msg = q.message?.message_id;
     if (kind === "lc") return this.onLifecycle(a, Number(b), c === "l", msg);
     if (kind === "st") return this.status.beat(true);
-    if (kind === "cf" && a === "default") {
-      if (this.life.setDefaultBackend(b)) log("default backend", b);
-      const { html, keyboard } = this.life.configView();
+    if (kind === "pn" || (kind === "cf" && a === "default")) {
+      // cf:default:<name> is the button on /config messages from before the panel
+      const data = kind === "cf" ? `pn:set:${b}:def` : String(q.data);
+      if (data.startsWith("pn:set:")) log("default backend", data.split(":")[2]);
+      const { html, keyboard } = this.panel.press(data);
       if (msg) await this.tg.edit(msg, html, { reply_markup: { inline_keyboard: keyboard } });
       return;
     }

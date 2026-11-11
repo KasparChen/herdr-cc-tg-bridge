@@ -68,8 +68,10 @@ export class Status {
     if (this.running) return;
     this.running = true;
     try {
-      this.herdrOk = (await H.workspaces()) !== undefined;
-      if (this.cfg.workspace && !this.workspaceId) this.workspaceId = await H.resolveWorkspace(this.cfg.workspace);
+      const list = await H.workspaces();
+      this.herdrOk = list !== undefined;
+      // looked up every beat: the workspace can close (with its last tab) and come back under a new id
+      if (this.cfg.workspace && list) this.workspaceId = H.findWorkspace(list, this.cfg.workspace);
       const h = this.health();
       if (this.workspaceId) {
         await H.workspaceToken(this.workspaceId, "tg", h.online ? `🟢 ${h.sessions}` : "🟡", this.cfg.statusIntervalSec * 3 * 1000);
