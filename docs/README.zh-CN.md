@@ -105,7 +105,7 @@ cp .env.example .env
 | `TG_CHAT_ID` | 是 | 群 ID |
 | `TG_ALLOWED_USERS` | 是 | 允许操作的用户 ID，多个用逗号分隔。其他人发的消息一律忽略 |
 | `TG_BRIDGE_WORKDIR` | 是 | 新会话的工作目录。Claude Code 从这里读取 CLAUDE.md 和项目记忆。要用家目录下的子目录，不要直接用家目录，因为 Claude Code 每次启动都会重新问是否信任家目录 |
-| `HERDR_WORKSPACE` | 否 | 新会话开在哪个 Herdr Space，填 ID 或名字都可以。不填就开在当前 Space |
+| `HERDR_WORKSPACE` | 否 | 新会话开在哪个 Herdr Space，填 ID 或名字都可以。不填就开在当前 Space。Herdr 关掉最后一个标签页时会连 Space 一起关掉，填名字的话下次开会话会自动重建，填 ID 不会 |
 | `TG_AUTOSEND_EXT` | 否 | 自动回传的文件扩展名。默认不含 `md` 和 `txt`，避免把笔记和草稿发出去 |
 | `TG_CLAUDE_ARGS` | 否 | 启动新会话时附加给 `claude` 的参数 |
 | `TG_BACKENDS` | 否 | 自定义后端名，逗号分隔，例如 `gw`。每个都要配 `TG_BACKEND_<名>_CMD`（启动它的 shell 命令）；可选 `_KIND`（`claude`，默认，或 `codex`）、`_BASE_URL`（电脑会话的 `ANTHROPIC_BASE_URL` 等于它时，`/tg-bind` 认成这个后端）和 `_KEY_FILE`（启动命令读的 key 文件，`/config` 只显示末 4 位） |

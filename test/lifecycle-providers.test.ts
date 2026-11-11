@@ -6,12 +6,14 @@ import { Store } from "../src/store";
 import { loadConfig } from "../src/config";
 
 let state: any, started: any[], closed: string[], label: string | undefined;
+let ensured: any = { id: "workspace" };
 let renamedTabs: string[] = [], keyboards: any[] = [], agents: any[] = [], failSpawn = false, prompts: string[] = [];
 mock.module("../src/herdr", () => ({
   paneState: async () => (typeof state === "function" ? state() : state),
   prompt: async (_: string, text: string) => { prompts.push(text); return { result: {} }; },
   spawnAgent: async (opts: any) => { started.push(opts); return failSpawn ? undefined : { pane: "new-pane", tab: "new-tab", terminal: "new-terminal", session: "test-session" }; },
   resolveWorkspace: async () => "workspace",
+  ensureWorkspace: async () => ensured,
   workspaces: async () => [{ workspace_id: "workspace", label: "Telegram" }],
   paneClose: async (pane: string) => { closed.push(pane); },
   tabRename: async (_: string, name: string) => { renamedTabs.push(name); return {}; },
@@ -40,7 +42,7 @@ case "$*" in *tg-bridge-marker*) echo '[{"type":"message","role":"developer","co
   cfg = loadConfig({ TELEGRAM_BOT_TOKEN: "fake", TG_CHAT_ID: "-1", TG_ALLOWED_USERS: "1", TG_BRIDGE_WORKDIR: dir, TG_BRIDGE_STATE_DIR: join(dir, "state") });
   store = new Store(cfg.stateDir); watchers = new Map(); notices = []; sends = []; calls = []; started = []; closed = [];
   state = { state: "gone" };
-  label = undefined; renamedTabs = []; keyboards = []; agents = []; failSpawn = false; prompts = [];
+  ensured = { id: "workspace" }; label = undefined; renamedTabs = []; keyboards = []; agents = []; failSpawn = false; prompts = [];
   tg = {
     chatId: -1,
     call: async (name: string, body: any) => { calls.push({ name, body }); return { ok: true, result: { message_thread_id: 41 } }; },
@@ -345,6 +347,21 @@ describe("mixed provider lifecycle (offline)", () => {
     appendFileSync(path, ask([q("语言？"), q("输出？")]));
     state.agent.agent_status = "blocked"; await w.tick();
     expect(keyboards).toHaveLength(1); expect(sends.at(-1)).toContain("/keys");
+  });
+});
+
+describe("workspace (offline)", () => {
+  test("a recreated workspace's root pane takes the first session, and its tab the topic's name", async () => {
+    ensured = { id: "wN", pane: "wN:p1", tab: "wN:t1" };
+    expect(await life.open(41, { fresh: true, name: "周报" })).toBe(true);
+    expect(started[0]).toMatchObject({ workspace: "wN", pane: "wN:p1" });
+    expect(renamedTabs).toEqual(["周报"]);
+    expect(notices.at(-1)).toContain("周报");
+  });
+  test("when the session does not start there, the new empty workspace is closed again", async () => {
+    ensured = { id: "wN", pane: "wN:p1", tab: "wN:t1" }; failSpawn = true;
+    expect(await life.open(41, { fresh: true, name: "x" })).toBe(false);
+    expect(closed).toEqual(["wN:p1"]);
   });
 });
 

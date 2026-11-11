@@ -42,10 +42,31 @@ export async function workspaces(): Promise<any[] | undefined> {
 }
 
 // accepts a workspace id ("wB") or its label ("Telegram")
+export const findWorkspace = (ws: any[] | undefined, idOrLabel?: string): string | undefined =>
+  idOrLabel ? ws?.find(w => w.workspace_id === idOrLabel || w.label === idOrLabel)?.workspace_id : undefined;
+
 export async function resolveWorkspace(idOrLabel?: string): Promise<string | undefined> {
-  if (!idOrLabel) return;
-  const ws = (await workspaces()) ?? [];
-  return ws.find(w => w.workspace_id === idOrLabel || w.label === idOrLabel)?.workspace_id;
+  return findWorkspace(await workspaces(), idOrLabel);
+}
+
+// The workspace for new sessions. Herdr closes a workspace with its last tab, so a configured label that no longer
+// exists is created again; `pane` is then the new workspace's root pane, for the first session to use instead of
+// leaving an empty shell tab beside it. An id ("wB") cannot be recreated: Herdr assigns ids. One at a time, so two
+// topics opened together do not create two workspaces.
+let ensuring: Promise<unknown> = Promise.resolve();
+export function ensureWorkspace(idOrLabel: string | undefined, cwd: string): Promise<{ id?: string; pane?: string; tab?: string }> {
+  const run = ensuring.then(async () => {
+    if (!idOrLabel) return {};
+    const list = await workspaces();
+    const id = findWorkspace(list, idOrLabel);
+    if (id || !list || /^w[A-Z0-9]{1,4}$/.test(idOrLabel)) return { id };
+    const r = await herdr("workspace", "create", "--label", idOrLabel, "--cwd", cwd, "--no-focus");
+    const w = r?.result?.workspace?.workspace_id;
+    log("workspace", w ? `created "${idOrLabel}" as ${w}` : `could not create "${idOrLabel}"`, w ? "" : JSON.stringify(r?.error ?? r).slice(0, 200));
+    return { id: w, pane: r?.result?.root_pane?.pane_id, tab: r?.result?.tab?.tab_id };
+  });
+  ensuring = run.catch(() => {});
+  return run;
 }
 
 export const paneGet = async (pane: string) => (await herdr("pane", "get", pane))?.result?.pane;

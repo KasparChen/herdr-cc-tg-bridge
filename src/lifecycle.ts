@@ -135,9 +135,14 @@ export class Lifecycle {
     // a session id is only resumable by a backend of the same kind
     const resume = !opts.fresh && this.canResume(old) && be.kind === (old!.kind ?? "claude");
     const label = cut(this.name(thread, old ?? { name: opts.name } as Binding), 40);
-    const ws = await H.resolveWorkspace(this.cfg.workspace);
+    const reuse = st?.state === "exited" && !old!.attached ? old!.pane : undefined;
+    const made = reuse ? { id: await H.resolveWorkspace(this.cfg.workspace) } : await H.ensureWorkspace(this.cfg.workspace, resume ? old!.cwd : this.cfg.workdir);
+    const ws = made.id;
+    // a workspace made just now comes with one shell tab: the session goes there and the tab takes its name
+    if (made.tab) await H.tabRename(made.tab, label);
     const s = await this.spawn(be, { workspace: ws, cwd: resume ? old!.cwd : this.cfg.workdir, label, thread,
-      pane: st?.state === "exited" && !old!.attached ? old!.pane : undefined, session: resume ? old!.session : undefined });
+      pane: reuse ?? made.pane, session: resume ? old!.session : undefined });
+    if (!s && made.pane) await H.paneClose(made.pane); // its only pane: the empty workspace goes with it
     if (!s) { await this.tg.notice(thread, tr(`❌ 开会话失败：${esc(be.name)} 没有在 Herdr 里起来`, `❌ Could not open a session: ${esc(be.name)} did not start in Herdr`)); return false; }
     const kind = be.kind;
     this.unwatch(thread);

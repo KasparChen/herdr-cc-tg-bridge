@@ -214,7 +214,7 @@ The installer does all of this for you. These are the same steps by hand, for Li
    | `TG_CHAT_ID` | yes | Group id |
    | `TG_ALLOWED_USERS` | yes | Comma-separated user ids allowed to drive sessions; everyone else is ignored |
    | `TG_BRIDGE_WORKDIR` | yes | Working directory for new sessions (where `CLAUDE.md` is picked up). Use a folder inside your home directory, not the home directory itself: Claude Code asks again on every start whether to trust it |
-   | `HERDR_WORKSPACE` | no | Herdr workspace (id or label) for new sessions |
+   | `HERDR_WORKSPACE` | no | Herdr workspace (id or label) for new sessions. Herdr closes a workspace with its last tab; a label is then created again for the next session, an id is not |
    | `TG_AUTOSEND_EXT` | no | Extensions sent back automatically; `md` and `txt` are off by default |
    | `TG_CLAUDE_ARGS` | no | Extra arguments for `claude` in new sessions |
    | `TG_BACKENDS` | no | Custom backends, comma separated, e.g. `gw`. Each needs `TG_BACKEND_<NAME>_CMD` (the shell command that starts it); optional `_KIND` (`claude`, default, or `codex`) `_BASE_URL` (a desktop session whose `ANTHROPIC_BASE_URL` equals it is recognised as this backend by `/tg-bind`) and `_KEY_FILE` (the key file the command reads; `/config` shows only its last 4 characters) |

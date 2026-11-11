@@ -17,12 +17,25 @@ case "$1 $2" in
 esac
 `, { mode: 0o755 });
 
+// a stand-in that knows the workspaces in $dir/ws (one "id label" per line) and logs every create
+const fakeWs = (have: string) => {
+  writeFileSync(join(dir, "ws"), have);
+  writeFileSync(join(dir, "herdr"), `#!/bin/sh
+case "$1 $2" in
+  "--version ") echo stub-herdr ;;
+  "workspace list") printf '{"result":{"workspaces":['; sep=; while read id label; do printf '%s{"workspace_id":"%s","label":"%s"}' "$sep" "$id" "$label"; sep=,; done < "${dir}/ws"; echo ']}}' ;;
+  "workspace create") echo "$*" >> "${dir}/created"; echo '{"result":{"workspace":{"workspace_id":"wN"},"root_pane":{"pane_id":"wN:p1"},"tab":{"tab_id":"wN:t1"}}}' ;;
+  *) echo '{"result":{}}' ;;
+esac
+`, { mode: 0o755 });
+};
+
 // never reaches the real Herdr: the child checks first that `herdr` is the stand-in, and stops otherwise
-async function spawnInChild(): Promise<any> {
+async function spawnInChild(call = `spawnAgent({ kind: "codex", cwd: "/tmp", label: "x", agent: "tg-1", args: [] })`): Promise<any> {
   const src = resolve(import.meta.dir, "../src/herdr.ts");
-  const code = `import { herdr, spawnAgent } from ${JSON.stringify(src)};
-    if (String(await herdr("--version")).trim() !== "stub-herdr") { console.log(JSON.stringify({ notStub: true })); process.exit(0); }
-    const s = await spawnAgent({ kind: "codex", cwd: "/tmp", label: "x", agent: "tg-1", args: [] });
+  const code = `import * as H from ${JSON.stringify(src)};
+    if (String(await H.herdr("--version")).trim() !== "stub-herdr") { console.log(JSON.stringify({ notStub: true })); process.exit(0); }
+    const s = await H.${call};
     console.log(JSON.stringify({ s: s ?? null }));`;
   const p = Bun.spawn(["bun", "-e", code], { cwd: dir, env: { ...process.env, PATH: `${dir}:${process.env.PATH}` }, stdout: "pipe", stderr: "pipe" });
   const out = await new Response(p.stdout).text();
@@ -45,5 +58,17 @@ describe("spawnAgent", () => {
     fake(`echo '{"error":{"code":"agent_exited","message":"gone"}}' >&2; exit 1`);
     expect(await spawnInChild()).toBeNull();
     expect(await Bun.file(join(dir, "closed")).exists()).toBe(true);
+  });
+  test("ensureWorkspace: an existing label or id is used as it is; a missing label is created once, an id never", async () => {
+    fakeWs("wB Projects\nwE Telegram\n");
+    expect(await spawnInChild(`ensureWorkspace("Telegram", "/w")`)).toEqual({ id: "wE" });
+    expect(await spawnInChild(`ensureWorkspace("wB", "/w")`)).toEqual({ id: "wB" });
+    expect(await Bun.file(join(dir, "created")).exists()).toBe(false);
+    fakeWs("wB Projects\n");
+    expect(await spawnInChild(`ensureWorkspace("wE", "/w")`)).toEqual({});
+    expect(await Bun.file(join(dir, "created")).exists()).toBe(false);
+    expect(await spawnInChild(`ensureWorkspace("Telegram", "/w")`)).toEqual({ id: "wN", pane: "wN:p1", tab: "wN:t1" });
+    expect((await Bun.file(join(dir, "created")).text()).trim()).toBe("workspace create --label Telegram --cwd /w --no-focus");
+    expect(await spawnInChild(`ensureWorkspace(undefined, "/w")`)).toEqual({});
   });
 });
